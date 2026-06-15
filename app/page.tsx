@@ -49,6 +49,15 @@ type MobilityKey = 'hips' | 'ankles' | 'shoulders' | 'thoracic' | 'hamstrings';
 type TabKey = 'train' | 'mobility' | 'library' | 'history';
 type StretchMode = 'daily' | 'pre' | 'recovery';
 
+type MobilityTest = {
+  id: string;
+  area: MobilityKey;
+  target: string;
+  title: string;
+  prompt: string;
+  imageLabel: string;
+};
+
 const equipmentOptions = ['bodyweight', 'dumbbell', 'machine', 'cable', 'smith machine', 'resistance band', 'bench', 'bar', 'box'];
 const goalOptions = ['MMA performance', 'Build muscle', 'Gain strength', 'Lose fat', 'Athletic performance', 'Improve conditioning'];
 const muscleOptions = ['back', 'legs', 'core', 'shoulders', 'chest', 'glutes', 'hamstrings', 'quads'];
@@ -59,20 +68,32 @@ const tabs: { key: TabKey; label: string }[] = [
   { key: 'history', label: 'History' },
 ];
 
-const mobilityAreas: { key: MobilityKey; label: string; target: string; test: string }[] = [
-  { key: 'hips', label: 'Hips', target: 'hips', test: 'Deep squat or 90/90 switch' },
-  { key: 'ankles', label: 'Ankles', target: 'ankles', test: 'Knee-to-wall ankle check' },
-  { key: 'shoulders', label: 'Shoulders', target: 'shoulders', test: 'Arms overhead without rib flare' },
-  { key: 'thoracic', label: 'Upper back', target: 'thoracic spine', test: 'Open-book rotation' },
-  { key: 'hamstrings', label: 'Hamstrings', target: 'hamstrings', test: 'Toe touch or leg raise' },
+const mobilityAreas: { key: MobilityKey; label: string; target: string }[] = [
+  { key: 'hips', label: 'Hips', target: 'hips' },
+  { key: 'ankles', label: 'Ankles', target: 'ankles' },
+  { key: 'shoulders', label: 'Shoulders', target: 'shoulders' },
+  { key: 'thoracic', label: 'Upper back', target: 'thoracic spine' },
+  { key: 'hamstrings', label: 'Hamstrings', target: 'hamstrings' },
 ];
 
-const calibrationOptions = [
-  { label: 'Easy', value: 95, help: 'Full range, no tightness' },
-  { label: 'Okay', value: 78, help: 'A little tight but fine' },
-  { label: 'Tight', value: 58, help: 'Noticeably limited' },
-  { label: 'Blocked', value: 38, help: 'Hard to reach position' },
-  { label: 'Pain', value: 18, help: 'Pain or sharp restriction' },
+const mobilityTests: MobilityTest[] = [
+  { id: 'hips-squat', area: 'hips', target: 'hips', title: 'Deep squat depth', prompt: 'Can you squat low with your chest up?', imageLabel: 'Squat' },
+  { id: 'hips-9090', area: 'hips', target: 'hips', title: '90/90 switch', prompt: 'Can both knees rotate side to side smoothly?', imageLabel: '90/90' },
+  { id: 'ankles-wall', area: 'ankles', target: 'ankles', title: 'Knee-to-wall', prompt: 'Can your knee travel forward while the heel stays down?', imageLabel: 'Wall' },
+  { id: 'ankles-squat', area: 'ankles', target: 'ankles', title: 'Heel-down squat', prompt: 'Do your heels stay planted at the bottom?', imageLabel: 'Heel' },
+  { id: 'shoulders-overhead', area: 'shoulders', target: 'shoulders', title: 'Overhead reach', prompt: 'Can your arms reach overhead without arching?', imageLabel: 'Reach' },
+  { id: 'shoulders-wall', area: 'shoulders', target: 'shoulders', title: 'Wall slide', prompt: 'Can your arms slide up a wall smoothly?', imageLabel: 'Slide' },
+  { id: 'thoracic-openbook', area: 'thoracic', target: 'thoracic spine', title: 'Open-book rotation', prompt: 'Can your chest rotate open without your knees lifting?', imageLabel: 'Rotate' },
+  { id: 'thoracic-thread', area: 'thoracic', target: 'thoracic spine', title: 'Thread the needle', prompt: 'Can your upper back rotate both ways evenly?', imageLabel: 'Twist' },
+  { id: 'hamstrings-toe', area: 'hamstrings', target: 'hamstrings', title: 'Toe touch', prompt: 'How close can you get to your toes with soft knees?', imageLabel: 'Fold' },
+  { id: 'hamstrings-leg', area: 'hamstrings', target: 'hamstrings', title: 'Straight-leg raise', prompt: 'Can you raise one leg without the other lifting?', imageLabel: 'Raise' },
+];
+
+const rangeOptions = [
+  { label: 'Low', value: 25 },
+  { label: 'Mid', value: 55 },
+  { label: 'Good', value: 78 },
+  { label: 'Great', value: 95 },
 ];
 
 const activityTargets: Record<string, string[]> = {
@@ -88,10 +109,17 @@ const activityTargets: Record<string, string[]> = {
 };
 
 const stretchModes: { key: StretchMode; label: string; description: string }[] = [
-  { key: 'daily', label: 'Daily reset', description: 'Balanced routine for your tight areas.' },
-  { key: 'pre', label: 'Before activity', description: 'Shorter movement prep before training.' },
+  { key: 'daily', label: 'Daily reset', description: 'Balanced routine for tight areas and general movement.' },
+  { key: 'pre', label: 'Before activity', description: 'Short movement prep before training or sports.' },
   { key: 'recovery', label: 'Recovery', description: 'Longer cooldown work after hard sessions.' },
 ];
+
+const stretchTimes = [5, 8, 12, 15, 20];
+
+const initialTestScores: Record<string, number> = mobilityTests.reduce((acc, test) => {
+  acc[test.id] = 78;
+  return acc;
+}, {} as Record<string, number>);
 
 export default function HomePage() {
   const supabase = useMemo(() => createClient(), []);
@@ -109,13 +137,19 @@ export default function HomePage() {
   const [selectedEquipment, setSelectedEquipment] = useState<string[]>(['bodyweight', 'dumbbell', 'machine', 'cable', 'smith machine']);
   const [priorities, setPriorities] = useState<string[]>(['back', 'legs', 'core', 'shoulders']);
   const [generated, setGenerated] = useState<GeneratedExercise[]>([]);
-  const [scores, setScores] = useState<Record<MobilityKey, number>>({ hips: 78, ankles: 78, shoulders: 78, thoracic: 78, hamstrings: 78 });
+  const [testScores, setTestScores] = useState<Record<string, number>>(initialTestScores);
   const [saveMessage, setSaveMessage] = useState('');
   const [workoutMessage, setWorkoutMessage] = useState('');
   const [stretchMessage, setStretchMessage] = useState('');
   const [activeTab, setActiveTab] = useState<TabKey>('train');
   const [activity, setActivity] = useState('MMA / BJJ');
   const [stretchMode, setStretchMode] = useState<StretchMode>('daily');
+  const [stretchMinutes, setStretchMinutes] = useState(8);
+
+  function areaScore(area: MobilityKey) {
+    const tests = mobilityTests.filter((test) => test.area === area);
+    return Math.round(tests.reduce((total, test) => total + (testScores[test.id] ?? 78), 0) / tests.length);
+  }
 
   async function loadSavedWorkouts() {
     const { data } = await supabase
@@ -278,12 +312,12 @@ export default function HomePage() {
     const { error } = await supabase.from('mobility_assessments').insert({
       user_id: userId,
       overall_score: overall,
-      hips_score: scores.hips,
-      ankles_score: scores.ankles,
-      shoulders_score: scores.shoulders,
-      thoracic_score: scores.thoracic,
-      hamstrings_score: scores.hamstrings,
-      notes: 'ForgeFit guided mobility calibration',
+      hips_score: areaScores.hips,
+      ankles_score: areaScores.ankles,
+      shoulders_score: areaScores.shoulders,
+      thoracic_score: areaScores.thoracic,
+      hamstrings_score: areaScores.hamstrings,
+      notes: 'ForgeFit guided mobility calibration with two tests per area',
     });
 
     setSaveMessage(error ? error.message : `Mobility score saved: ${overall}`);
@@ -299,26 +333,37 @@ export default function HomePage() {
       user_id: userId,
       title: `${stretchModeLabel} - ${activity}`,
       target_areas: routineTargets,
-      duration_minutes: routineMinutes,
+      duration_minutes: stretchMinutes,
     });
 
     setStretchMessage(error ? error.message : 'Stretch routine saved.');
   }
 
-  const mobilityScore = Math.round((scores.hips + scores.ankles + scores.shoulders + scores.thoracic + scores.hamstrings) / 5);
-  const weakTargets = mobilityAreas.filter((area) => scores[area.key] < 70).map((area) => area.target);
+  const areaScores: Record<MobilityKey, number> = {
+    hips: areaScore('hips'),
+    ankles: areaScore('ankles'),
+    shoulders: areaScore('shoulders'),
+    thoracic: areaScore('thoracic'),
+    hamstrings: areaScore('hamstrings'),
+  };
+  const mobilityScore = Math.round((areaScores.hips + areaScores.ankles + areaScores.shoulders + areaScores.thoracic + areaScores.hamstrings) / 5);
+  const weakTargets = mobilityAreas.filter((area) => areaScores[area.key] < 70).map((area) => area.target);
   const activityBaseTargets = activityTargets[activity] ?? activityTargets.General;
   const routineTargets = Array.from(new Set(stretchMode === 'pre' ? [...activityBaseTargets, ...weakTargets] : [...weakTargets, ...activityBaseTargets]));
   const stretchModeLabel = stretchModes.find((mode) => mode.key === stretchMode)?.label ?? 'Daily reset';
   const selectedStretchDescription = stretchModes.find((mode) => mode.key === stretchMode)?.description ?? '';
-  const routineLimit = stretchMode === 'pre' ? 4 : stretchMode === 'recovery' ? 6 : 5;
-  const stretchRoutine = (mobility.filter((drill) => routineTargets.includes(drill.target_area)).length ? mobility.filter((drill) => routineTargets.includes(drill.target_area)) : mobility)
-    .sort((a, b) => routineTargets.indexOf(a.target_area) - routineTargets.indexOf(b.target_area))
-    .slice(0, routineLimit)
-    .map((drill) => ({
-      ...drill,
-      displaySeconds: stretchMode === 'pre' ? Math.min(drill.duration_seconds, 60) : stretchMode === 'recovery' ? Math.max(drill.duration_seconds, 75) : drill.duration_seconds,
-    }));
+  const baseCandidates = mobility.filter((drill) => routineTargets.includes(drill.target_area));
+  const routineCandidates = baseCandidates.length ? baseCandidates : mobility;
+  const perDrillSeconds = stretchMode === 'pre' ? (stretchMinutes <= 5 ? 45 : 60) : stretchMode === 'recovery' ? (stretchMinutes >= 15 ? 90 : 75) : 60;
+  const maxDrillsByTime = Math.max(2, Math.floor((stretchMinutes * 60) / perDrillSeconds));
+  const stretchRoutine = routineCandidates
+    .sort((a, b) => {
+      const scoreA = routineTargets.indexOf(a.target_area) === -1 ? 999 : routineTargets.indexOf(a.target_area);
+      const scoreB = routineTargets.indexOf(b.target_area) === -1 ? 999 : routineTargets.indexOf(b.target_area);
+      return scoreA - scoreB;
+    })
+    .slice(0, maxDrillsByTime)
+    .map((drill) => ({ ...drill, displaySeconds: perDrillSeconds }));
   const routineMinutes = Math.max(1, Math.ceil(stretchRoutine.reduce((total, drill) => total + drill.displaySeconds, 0) / 60));
 
   if (!userId) {
@@ -424,22 +469,32 @@ export default function HomePage() {
         {activeTab === 'mobility' && (
           <section className="rounded-[2rem] border border-white/10 bg-white/5 p-5">
             <p className="text-sm font-semibold text-orange-300">Mobility</p>
-            <h2 className="mt-1 text-2xl font-black">Quick calibration</h2>
-            <p className="mt-2 text-sm text-zinc-300">Pick how each test feels. No confusing 0-100 guessing.</p>
+            <h2 className="mt-1 text-2xl font-black">Guided calibration</h2>
+            <p className="mt-2 text-sm text-zinc-300">Tap the visual level that matches how far you can comfortably reach. This gives each area two checks instead of one guess.</p>
             <div className="mt-4 flex flex-col gap-4">
-              {mobilityAreas.map((area) => (
-                <div key={area.key} className="rounded-2xl bg-black/25 p-4">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <p className="font-black">{area.label}</p>
-                      <p className="text-xs text-zinc-400">{area.test}</p>
+              {mobilityTests.map((test) => (
+                <div key={test.id} className="rounded-2xl bg-black/25 p-4">
+                  <div className="flex gap-3">
+                    <div className="flex h-20 w-20 shrink-0 flex-col items-center justify-center rounded-2xl border border-orange-400/30 bg-orange-500/10">
+                      <div className="text-2xl font-black text-orange-300">{test.imageLabel}</div>
+                      <div className="mt-1 h-2 w-12 rounded-full bg-white/10">
+                        <div className="h-2 rounded-full bg-orange-400" style={{ width: `${testScores[test.id] ?? 78}%` }} />
+                      </div>
                     </div>
-                    <span className="rounded-full bg-white/10 px-3 py-1 text-xs font-bold">{scores[area.key]}</span>
-                  </div>
-                  <div className="mt-3 grid grid-cols-5 gap-2">
-                    {calibrationOptions.map((option) => (
-                      <button key={option.label} onClick={() => setScores({ ...scores, [area.key]: option.value })} className={`rounded-xl px-2 py-2 text-[10px] font-black ${scores[area.key] === option.value ? 'bg-orange-500 text-black' : 'bg-white/10'}`}>{option.label}</button>
-                    ))}
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <p className="font-black">{test.title}</p>
+                          <p className="text-xs text-zinc-400">{test.prompt}</p>
+                        </div>
+                        <span className="rounded-full bg-white/10 px-3 py-1 text-xs font-bold">{testScores[test.id]}</span>
+                      </div>
+                      <div className="mt-3 grid grid-cols-4 gap-2">
+                        {rangeOptions.map((option) => (
+                          <button key={option.label} onClick={() => setTestScores({ ...testScores, [test.id]: option.value })} className={`rounded-xl px-2 py-2 text-[10px] font-black ${testScores[test.id] === option.value ? 'bg-orange-500 text-black' : 'bg-white/10'}`}>{option.label}</button>
+                        ))}
+                      </div>
+                    </div>
                   </div>
                 </div>
               ))}
@@ -447,6 +502,7 @@ export default function HomePage() {
             <div className="mt-5 rounded-2xl bg-black/30 p-4">
               <p className="text-sm text-zinc-400">Current score</p>
               <p className="text-4xl font-black text-orange-300">{mobilityScore}</p>
+              <p className="mt-1 text-xs text-zinc-400">Lowest areas get more stretches automatically.</p>
             </div>
             <button onClick={saveMobilityAssessment} className="mt-4 w-full rounded-2xl bg-orange-500 px-4 py-4 font-black text-black">Save mobility score</button>
             {saveMessage && <p className="mt-3 text-sm text-orange-200">{saveMessage}</p>}
@@ -455,6 +511,13 @@ export default function HomePage() {
               <p className="text-sm font-semibold text-orange-300">Stretch routine</p>
               <h3 className="mt-1 text-xl font-black">{stretchModeLabel}</h3>
               <p className="mt-1 text-sm text-zinc-300">{selectedStretchDescription}</p>
+
+              <p className="mt-4 text-sm font-bold">How much time do you have?</p>
+              <div className="mt-2 grid grid-cols-5 gap-2">
+                {stretchTimes.map((minutes) => (
+                  <button key={minutes} onClick={() => setStretchMinutes(minutes)} className={`rounded-2xl px-2 py-3 text-xs font-black ${stretchMinutes === minutes ? 'bg-orange-500 text-black' : 'bg-black/30'}`}>{minutes}m</button>
+                ))}
+              </div>
 
               <p className="mt-4 text-sm font-bold">Mode</p>
               <div className="mt-2 grid grid-cols-3 gap-2">
@@ -470,7 +533,7 @@ export default function HomePage() {
 
               <div className="mt-4 rounded-2xl bg-black/30 p-4">
                 <p className="text-sm text-zinc-400">Routine length</p>
-                <p className="text-2xl font-black">{routineMinutes} min</p>
+                <p className="text-2xl font-black">About {routineMinutes} min</p>
                 <p className="mt-1 text-xs text-zinc-400">Targets: {routineTargets.join(', ')}</p>
               </div>
 
