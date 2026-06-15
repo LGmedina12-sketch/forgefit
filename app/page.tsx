@@ -54,7 +54,7 @@ const goalOptions = ['MMA performance', 'Build muscle', 'Gain strength', 'Lose f
 const equipmentOptions = ['bodyweight', 'dumbbell', 'machine', 'cable', 'smith machine', 'resistance band', 'bench', 'bar', 'box'];
 const muscleOptions = ['back', 'legs', 'core', 'shoulders', 'chest', 'glutes', 'hamstrings', 'quads'];
 
-const gowodScores: Record<Area, number> = {
+const originalGowodScores: Record<Area, number> = {
   Shoulders: 91,
   Overhead: 88,
   Thorax: 99,
@@ -107,12 +107,14 @@ export default function HomePage() {
   const [generated, setGenerated] = useState<GeneratedExercise[]>([]);
   const [scores, setScores] = useState<Record<string, number>>(initialScores);
   const [source, setSource] = useState<SourceKey>('gowod');
+  const [gowodGlobal, setGowodGlobal] = useState(89);
+  const [gowodAdjustments, setGowodAdjustments] = useState<Record<Area, number>>(originalGowodScores);
   const [activeTab, setActiveTab] = useState<TabKey>('train');
   const [workoutMessage, setWorkoutMessage] = useState('');
 
   const forgefitAreaScores = getForgefitAreaScores(scores);
-  const activeAreaScores = source === 'gowod' ? getGowodAreaScores() : forgefitAreaScores;
-  const mobilityAverage = source === 'gowod' ? 89 : Math.round(activeAreaScores.reduce((total, item) => total + item.score, 0) / activeAreaScores.length);
+  const activeAreaScores = source === 'gowod' ? getGowodAreaScores(gowodAdjustments) : forgefitAreaScores;
+  const mobilityAverage = source === 'gowod' ? gowodGlobal : Math.round(activeAreaScores.reduce((total, item) => total + item.score, 0) / activeAreaScores.length);
   const weakestAreas = [...activeAreaScores].sort((a, b) => a.score - b.score).slice(0, 2).map((item) => item.area);
   const weakestTargets = weakestAreas.map((area) => targetByArea[area]);
   const recommendedDrills = mobility
@@ -304,24 +306,41 @@ export default function HomePage() {
 
         {activeTab === 'mobility' && (
           <section className="flex flex-col gap-5">
-            <Panel title="Mobility score" eyebrow="GOWOD result saved">
+            <Panel title="Mobility score" eyebrow="Adjustable GOWOD result">
               <div className="flex items-center justify-center py-3">
                 <div className="flex h-36 w-36 items-center justify-center rounded-full border-[10px] border-emerald-400 text-center">
-                  <div><p className="text-5xl font-black">89</p><p className="text-sm text-zinc-300">global</p></div>
+                  <div><p className="text-5xl font-black">{mobilityAverage}</p><p className="text-sm text-zinc-300">global</p></div>
                 </div>
               </div>
+              {source === 'gowod' && (
+                <label className="mb-4 block rounded-2xl bg-black/25 p-3">
+                  <div className="flex items-center justify-between text-sm"><span className="font-black text-orange-300">Global score</span><span>{gowodGlobal}</span></div>
+                  <input className="mt-2 w-full" type="range" min="0" max="100" value={gowodGlobal} onChange={(event) => setGowodGlobal(Number(event.target.value))} />
+                </label>
+              )}
               <div className="grid grid-cols-3 gap-2">
-                {getGowodAreaScores().map((item) => <ScoreBar key={item.area} area={item.area} score={item.score} />)}
+                {activeAreaScores.map((item) => (
+                  <ScoreBar
+                    key={item.area}
+                    area={item.area}
+                    score={item.score}
+                    editable={source === 'gowod'}
+                    onChange={(next) => setGowodAdjustments({ ...gowodAdjustments, [item.area]: next })}
+                  />
+                ))}
               </div>
+              {source === 'gowod' && (
+                <button onClick={() => { setGowodGlobal(89); setGowodAdjustments(originalGowodScores); }} className="mt-3 w-full rounded-2xl bg-white/10 px-4 py-3 text-sm font-black text-white">Reset to screenshot scores</button>
+              )}
               <div className="mt-4 grid grid-cols-2 gap-2">
                 <button onClick={() => setSource('gowod')} className={`rounded-2xl px-3 py-3 text-sm font-black ${source === 'gowod' ? 'bg-orange-500 text-black' : 'bg-white/10 text-white'}`}>Use GOWOD</button>
                 <button onClick={() => setSource('forgefit')} className={`rounded-2xl px-3 py-3 text-sm font-black ${source === 'forgefit' ? 'bg-orange-500 text-black' : 'bg-white/10 text-white'}`}>Use sliders</button>
               </div>
-              <p className="mt-3 text-sm text-zinc-300">Selected source: <span className="font-black text-orange-300">{source === 'gowod' ? 'GOWOD screenshot scores' : 'ForgeFit slider test'}</span>. Recommendations below use this source.</p>
+              <p className="mt-3 text-sm text-zinc-300">Selected source: <span className="font-black text-orange-300">{source === 'gowod' ? 'adjustable GOWOD scores' : 'ForgeFit slider test'}</span>. Recommendations below use this source.</p>
             </Panel>
 
             <Panel title="Routine priority" eyebrow="Actually adapting">
-              <p className="text-sm text-zinc-300">Your GOWOD post-chain score is <span className="font-black text-orange-300">22</span>, so the routine prioritizes hamstrings, calves, and posterior-chain mobility first.</p>
+              <p className="text-sm text-zinc-300">Your lowest selected area is <span className="font-black text-orange-300">{weakestAreas[0]}</span>, so the routine prioritizes that area first. If you adjust a GOWOD slider, this changes immediately.</p>
             </Panel>
 
             {source === 'forgefit' && mobilityTests.map((test) => (
@@ -356,17 +375,17 @@ function getForgefitAreaScores(scores: Record<string, number>) {
   });
 }
 
-function getGowodAreaScores() {
-  return (Object.entries(gowodScores) as [Area, number][]).map(([area, score]) => ({ area, score }));
+function getGowodAreaScores(scores: Record<Area, number>) {
+  return (Object.entries(scores) as [Area, number][]).map(([area, score]) => ({ area, score }));
 }
 
 function Panel({ eyebrow, title, children }: { eyebrow: string; title: string; children: ReactNode }) {
   return <section className="rounded-[2rem] border border-white/10 bg-white/5 p-5"><p className="text-sm font-semibold text-orange-300">{eyebrow}</p><h2 className="mt-1 text-xl font-black">{title}</h2><div className="mt-4">{children}</div></section>;
 }
 
-function ScoreBar({ area, score }: { area: Area; score: number }) {
+function ScoreBar({ area, score, editable = false, onChange }: { area: Area; score: number; editable?: boolean; onChange?: (next: number) => void }) {
   const color = score < 40 ? 'bg-orange-400' : 'bg-emerald-400';
-  return <div className="rounded-2xl bg-black/25 p-3 text-center"><p className="mx-auto rounded-lg bg-black/40 px-2 py-1 text-sm font-black">{score}</p><div className="mx-auto mt-2 flex h-20 w-2 items-end rounded-full bg-zinc-700"><span className={`block w-2 rounded-full ${color}`} style={{ height: `${score}%` }} /></div><p className="mt-2 text-[10px] font-bold text-zinc-300">{area}</p></div>;
+  return <div className="rounded-2xl bg-black/25 p-3 text-center"><p className="mx-auto rounded-lg bg-black/40 px-2 py-1 text-sm font-black">{score}</p><div className="mx-auto mt-2 flex h-20 w-2 items-end rounded-full bg-zinc-700"><span className={`block w-2 rounded-full ${color}`} style={{ height: `${score}%` }} /></div><p className="mt-2 text-[10px] font-bold text-zinc-300">{area}</p>{editable && <input className="mt-2 w-full" type="range" min="0" max="100" value={score} onChange={(event) => onChange?.(Number(event.target.value))} />}</div>;
 }
 
 function Chooser({ title, options, selected, onToggle }: { title: string; options: string[]; selected: string[]; onToggle: (value: string) => void }) {
