@@ -1,6 +1,5 @@
 import type { Metadata, Viewport } from 'next';
 import OwnerTab from '@/components/OwnerTab';
-import VisualUpgrade from '@/components/VisualUpgrade';
 import './globals.css';
 
 export const metadata: Metadata = {
@@ -20,7 +19,6 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en">
       <body>
         {children}
-        <VisualUpgrade />
         <OwnerTab />
       </body>
     </html>
