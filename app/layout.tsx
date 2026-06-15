@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from 'next';
-import OwnerAdminLink from '@/components/OwnerAdminLink';
+import OwnerTab from '@/components/OwnerTab';
 import './globals.css';
 
 export const metadata: Metadata = {
@@ -19,7 +19,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en">
       <body>
         {children}
-        <OwnerAdminLink />
+        <OwnerTab />
       </body>
     </html>
   );
