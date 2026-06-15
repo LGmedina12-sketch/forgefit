@@ -55,7 +55,8 @@ type MobilityTest = {
   target: string;
   title: string;
   prompt: string;
-  imageLabel: string;
+  startLabel: string;
+  endLabel: string;
 };
 
 const equipmentOptions = ['bodyweight', 'dumbbell', 'machine', 'cable', 'smith machine', 'resistance band', 'bench', 'bar', 'box'];
@@ -77,23 +78,16 @@ const mobilityAreas: { key: MobilityKey; label: string; target: string }[] = [
 ];
 
 const mobilityTests: MobilityTest[] = [
-  { id: 'hips-squat', area: 'hips', target: 'hips', title: 'Deep squat depth', prompt: 'Can you squat low with your chest up?', imageLabel: 'Squat' },
-  { id: 'hips-9090', area: 'hips', target: 'hips', title: '90/90 switch', prompt: 'Can both knees rotate side to side smoothly?', imageLabel: '90/90' },
-  { id: 'ankles-wall', area: 'ankles', target: 'ankles', title: 'Knee-to-wall', prompt: 'Can your knee travel forward while the heel stays down?', imageLabel: 'Wall' },
-  { id: 'ankles-squat', area: 'ankles', target: 'ankles', title: 'Heel-down squat', prompt: 'Do your heels stay planted at the bottom?', imageLabel: 'Heel' },
-  { id: 'shoulders-overhead', area: 'shoulders', target: 'shoulders', title: 'Overhead reach', prompt: 'Can your arms reach overhead without arching?', imageLabel: 'Reach' },
-  { id: 'shoulders-wall', area: 'shoulders', target: 'shoulders', title: 'Wall slide', prompt: 'Can your arms slide up a wall smoothly?', imageLabel: 'Slide' },
-  { id: 'thoracic-openbook', area: 'thoracic', target: 'thoracic spine', title: 'Open-book rotation', prompt: 'Can your chest rotate open without your knees lifting?', imageLabel: 'Rotate' },
-  { id: 'thoracic-thread', area: 'thoracic', target: 'thoracic spine', title: 'Thread the needle', prompt: 'Can your upper back rotate both ways evenly?', imageLabel: 'Twist' },
-  { id: 'hamstrings-toe', area: 'hamstrings', target: 'hamstrings', title: 'Toe touch', prompt: 'How close can you get to your toes with soft knees?', imageLabel: 'Fold' },
-  { id: 'hamstrings-leg', area: 'hamstrings', target: 'hamstrings', title: 'Straight-leg raise', prompt: 'Can you raise one leg without the other lifting?', imageLabel: 'Raise' },
-];
-
-const rangeOptions = [
-  { label: 'Low', value: 25 },
-  { label: 'Mid', value: 55 },
-  { label: 'Good', value: 78 },
-  { label: 'Great', value: 95 },
+  { id: 'hips-squat', area: 'hips', target: 'hips', title: 'Deep squat depth', prompt: 'Slide to the deepest comfortable squat you can reach.', startLabel: 'Tall squat', endLabel: 'Deep squat' },
+  { id: 'hips-9090', area: 'hips', target: 'hips', title: '90/90 hip switch', prompt: 'Slide based on how close you get to smooth side-to-side rotation.', startLabel: 'Blocked switch', endLabel: 'Smooth switch' },
+  { id: 'ankles-wall', area: 'ankles', target: 'ankles', title: 'Knee-to-wall', prompt: 'Slide based on how far your knee can travel while heel stays down.', startLabel: 'Far from wall', endLabel: 'Knee to wall' },
+  { id: 'ankles-squat', area: 'ankles', target: 'ankles', title: 'Heel-down squat', prompt: 'Slide based on how easily both heels stay planted.', startLabel: 'Heel lifts', endLabel: 'Heel planted' },
+  { id: 'shoulders-overhead', area: 'shoulders', target: 'shoulders', title: 'Overhead reach', prompt: 'Slide based on how close your arms get overhead without arching.', startLabel: 'Forward arms', endLabel: 'Stacked overhead' },
+  { id: 'shoulders-wall', area: 'shoulders', target: 'shoulders', title: 'Wall slide', prompt: 'Slide based on how high you can slide your arms smoothly.', startLabel: 'Low slide', endLabel: 'High slide' },
+  { id: 'thoracic-openbook', area: 'thoracic', target: 'thoracic spine', title: 'Open-book rotation', prompt: 'Slide based on how far your chest rotates while knees stay stacked.', startLabel: 'Small turn', endLabel: 'Open chest' },
+  { id: 'thoracic-thread', area: 'thoracic', target: 'thoracic spine', title: 'Thread the needle', prompt: 'Slide based on how far your upper back rotates both ways.', startLabel: 'Tight twist', endLabel: 'Full twist' },
+  { id: 'hamstrings-toe', area: 'hamstrings', target: 'hamstrings', title: 'Toe touch', prompt: 'Slide based on how close your hands get to your toes.', startLabel: 'Hands high', endLabel: 'Touch toes' },
+  { id: 'hamstrings-leg', area: 'hamstrings', target: 'hamstrings', title: 'Straight-leg raise', prompt: 'Slide based on how high one leg raises without the other lifting.', startLabel: 'Low raise', endLabel: 'High raise' },
 ];
 
 const activityTargets: Record<string, string[]> = {
@@ -117,7 +111,7 @@ const stretchModes: { key: StretchMode; label: string; description: string }[] =
 const stretchTimes = [5, 8, 12, 15, 20];
 
 const initialTestScores: Record<string, number> = mobilityTests.reduce((acc, test) => {
-  acc[test.id] = 78;
+  acc[test.id] = 70;
   return acc;
 }, {} as Record<string, number>);
 
@@ -148,7 +142,7 @@ export default function HomePage() {
 
   function areaScore(area: MobilityKey) {
     const tests = mobilityTests.filter((test) => test.area === area);
-    return Math.round(tests.reduce((total, test) => total + (testScores[test.id] ?? 78), 0) / tests.length);
+    return Math.round(tests.reduce((total, test) => total + (testScores[test.id] ?? 70), 0) / tests.length);
   }
 
   async function loadSavedWorkouts() {
@@ -317,10 +311,10 @@ export default function HomePage() {
       shoulders_score: areaScores.shoulders,
       thoracic_score: areaScores.thoracic,
       hamstrings_score: areaScores.hamstrings,
-      notes: 'ForgeFit guided mobility calibration with two tests per area',
+      notes: `Slider calibration: ${JSON.stringify(testScores)}`,
     });
 
-    setSaveMessage(error ? error.message : `Mobility score saved: ${overall}`);
+    setSaveMessage(error ? error.message : `Saved real score: ${overall}`);
   }
 
   async function saveStretchSession() {
@@ -452,7 +446,8 @@ export default function HomePage() {
             <div className="mt-4 flex flex-col gap-3">
               {generated.map((exercise) => (
                 <article key={exercise.id} className="rounded-2xl bg-black/25 p-4">
-                  <div className="flex items-start justify-between gap-3">
+                  <ExerciseIllustration exercise={exercise} />
+                  <div className="mt-3 flex items-start justify-between gap-3">
                     <div>
                       <h3 className="font-bold">{exercise.name}</h3>
                       <p className="text-xs text-zinc-400">{exercise.muscle_groups.join(' • ')}</p>
@@ -469,40 +464,36 @@ export default function HomePage() {
         {activeTab === 'mobility' && (
           <section className="rounded-[2rem] border border-white/10 bg-white/5 p-5">
             <p className="text-sm font-semibold text-orange-300">Mobility</p>
-            <h2 className="mt-1 text-2xl font-black">Guided calibration</h2>
-            <p className="mt-2 text-sm text-zinc-300">Tap the visual level that matches how far you can comfortably reach. This gives each area two checks instead of one guess.</p>
+            <h2 className="mt-1 text-2xl font-black">Motion calibration</h2>
+            <p className="mt-2 text-sm text-zinc-300">Move each slider to match where you actually are in the motion. The score, weak areas, and routine update instantly.</p>
+            <div className="mt-4 rounded-2xl bg-black/30 p-4">
+              <p className="text-sm text-zinc-400">Live mobility score</p>
+              <p className="text-4xl font-black text-orange-300">{mobilityScore}</p>
+              <div className="mt-3 grid grid-cols-5 gap-2 text-center text-[10px] text-zinc-400">
+                {mobilityAreas.map((area) => <div key={area.key}><p className="font-black text-white">{areaScores[area.key]}</p><p>{area.label}</p></div>)}
+              </div>
+            </div>
             <div className="mt-4 flex flex-col gap-4">
               {mobilityTests.map((test) => (
                 <div key={test.id} className="rounded-2xl bg-black/25 p-4">
-                  <div className="flex gap-3">
-                    <div className="flex h-20 w-20 shrink-0 flex-col items-center justify-center rounded-2xl border border-orange-400/30 bg-orange-500/10">
-                      <div className="text-2xl font-black text-orange-300">{test.imageLabel}</div>
-                      <div className="mt-1 h-2 w-12 rounded-full bg-white/10">
-                        <div className="h-2 rounded-full bg-orange-400" style={{ width: `${testScores[test.id] ?? 78}%` }} />
-                      </div>
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="font-black">{test.title}</p>
+                      <p className="text-xs text-zinc-400">{test.prompt}</p>
                     </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-start justify-between gap-2">
-                        <div>
-                          <p className="font-black">{test.title}</p>
-                          <p className="text-xs text-zinc-400">{test.prompt}</p>
-                        </div>
-                        <span className="rounded-full bg-white/10 px-3 py-1 text-xs font-bold">{testScores[test.id]}</span>
-                      </div>
-                      <div className="mt-3 grid grid-cols-4 gap-2">
-                        {rangeOptions.map((option) => (
-                          <button key={option.label} onClick={() => setTestScores({ ...testScores, [test.id]: option.value })} className={`rounded-xl px-2 py-2 text-[10px] font-black ${testScores[test.id] === option.value ? 'bg-orange-500 text-black' : 'bg-white/10'}`}>{option.label}</button>
-                        ))}
-                      </div>
-                    </div>
+                    <span className="rounded-full bg-orange-500/15 px-3 py-1 text-xs font-black text-orange-200">{testScores[test.id]}</span>
+                  </div>
+                  <div className="mt-3 grid grid-cols-2 gap-2">
+                    <CalibrationIllustration test={test} value={0} caption={test.startLabel} />
+                    <CalibrationIllustration test={test} value={100} caption={test.endLabel} />
+                  </div>
+                  <div className="mt-3 rounded-2xl border border-white/10 bg-white/5 p-3">
+                    <CalibrationIllustration test={test} value={testScores[test.id] ?? 70} caption="Your range" large />
+                    <input className="mt-3 w-full" type="range" min="0" max="100" step="1" value={testScores[test.id] ?? 70} onChange={(event) => setTestScores({ ...testScores, [test.id]: Number(event.target.value) })} />
+                    <div className="mt-1 flex justify-between text-[10px] text-zinc-500"><span>Start</span><span>End range</span></div>
                   </div>
                 </div>
               ))}
-            </div>
-            <div className="mt-5 rounded-2xl bg-black/30 p-4">
-              <p className="text-sm text-zinc-400">Current score</p>
-              <p className="text-4xl font-black text-orange-300">{mobilityScore}</p>
-              <p className="mt-1 text-xs text-zinc-400">Lowest areas get more stretches automatically.</p>
             </div>
             <button onClick={saveMobilityAssessment} className="mt-4 w-full rounded-2xl bg-orange-500 px-4 py-4 font-black text-black">Save mobility score</button>
             {saveMessage && <p className="mt-3 text-sm text-orange-200">{saveMessage}</p>}
@@ -540,6 +531,7 @@ export default function HomePage() {
               <div className="mt-3 flex flex-col gap-2">
                 {stretchRoutine.map((drill) => (
                   <div key={drill.id} className="rounded-2xl bg-black/25 px-4 py-3">
+                    <div className="mb-3"><MobilityDrillIllustration drill={drill} /></div>
                     <div className="flex items-center justify-between gap-3">
                       <div>
                         <p className="font-semibold">{drill.name}</p>
@@ -564,7 +556,8 @@ export default function HomePage() {
             <div className="mt-4 flex flex-col gap-2">
               {exercises.map((exercise) => (
                 <div key={exercise.id} className="rounded-2xl bg-black/25 px-4 py-3">
-                  <p className="font-semibold">{exercise.name}</p>
+                  <ExerciseIllustration exercise={exercise} compact />
+                  <p className="mt-2 font-semibold">{exercise.name}</p>
                   <p className="text-xs text-zinc-400">{exercise.muscle_groups.join(' • ')} · {exercise.equipment_needed.join(', ')}</p>
                 </div>
               ))}
@@ -598,6 +591,77 @@ function Stat({ icon, label, value }: { icon: React.ReactNode; label: string; va
       <div className="mb-3 text-orange-300">{icon}</div>
       <p className="text-xs text-zinc-400">{label}</p>
       <p className="text-lg font-black">{value}</p>
+    </div>
+  );
+}
+
+function CalibrationIllustration({ test, value, caption, large = false }: { test: MobilityTest; value: number; caption: string; large?: boolean }) {
+  const progress = Math.max(0, Math.min(100, value));
+  const angle = -40 + progress * 0.8;
+  const height = large ? 132 : 86;
+  const areaColor = progress < 45 ? 'text-red-300' : progress < 70 ? 'text-yellow-300' : 'text-orange-300';
+  return (
+    <div className={`rounded-2xl border border-white/10 bg-black/30 p-2 ${large ? 'min-h-[150px]' : ''}`}>
+      <svg viewBox="0 0 220 120" className="w-full" style={{ height }} role="img" aria-label={`${test.title} ${caption}`}>
+        <rect x="8" y="8" width="204" height="104" rx="18" fill="rgba(255,255,255,0.04)" />
+        <line x1="25" y1="98" x2="195" y2="98" stroke="rgba(255,255,255,0.22)" strokeWidth="3" />
+        <circle cx="92" cy="46" r="13" fill="#fb923c" />
+        <line x1="92" y1="60" x2="92" y2="80" stroke="#fed7aa" strokeWidth="7" strokeLinecap="round" />
+        <line x1="92" y1="78" x2={92 + Math.cos((angle * Math.PI) / 180) * 42} y2={78 + Math.sin((angle * Math.PI) / 180) * 42} stroke="#fed7aa" strokeWidth="7" strokeLinecap="round" />
+        <line x1="92" y1="78" x2={92 - Math.cos((angle * Math.PI) / 180) * 32} y2={78 - Math.sin((angle * Math.PI) / 180) * 22} stroke="#fed7aa" strokeWidth="7" strokeLinecap="round" />
+        <line x1="92" y1="63" x2={92 - progress * 0.55} y2={54 + (100 - progress) * 0.18} stroke="#fdba74" strokeWidth="6" strokeLinecap="round" />
+        <line x1="92" y1="63" x2={92 + progress * 0.55} y2={54 + (100 - progress) * 0.18} stroke="#fdba74" strokeWidth="6" strokeLinecap="round" />
+        <path d={`M35 96 C ${60 + progress * 0.5} ${92 - progress * 0.35}, ${120 + progress * 0.3} ${92 - progress * 0.55}, 185 35`} fill="none" stroke="rgba(251,146,60,0.45)" strokeWidth="3" strokeDasharray="6 6" />
+      </svg>
+      <div className="mt-1 flex items-center justify-between text-[10px]">
+        <span className="text-zinc-400">{caption}</span>
+        <span className={`font-black ${areaColor}`}>{progress}%</span>
+      </div>
+    </div>
+  );
+}
+
+function ExerciseIllustration({ exercise, compact = false }: { exercise: Pick<DbExercise, 'name' | 'category' | 'muscle_groups'>; compact?: boolean }) {
+  const isPower = exercise.category === 'power';
+  const isConditioning = exercise.category === 'conditioning';
+  const isCore = exercise.muscle_groups.includes('core');
+  const y = compact ? 72 : 82;
+  return (
+    <div className="rounded-2xl border border-white/10 bg-gradient-to-br from-orange-500/10 to-black/20 p-2">
+      <svg viewBox="0 0 260 110" className="w-full" style={{ height: compact ? 70 : 96 }} role="img" aria-label={`${exercise.name} movement illustration`}>
+        <rect x="8" y="8" width="244" height="94" rx="18" fill="rgba(255,255,255,0.04)" />
+        <line x1="28" y1="92" x2="232" y2="92" stroke="rgba(255,255,255,0.2)" strokeWidth="3" />
+        {isConditioning && <path d="M45 72 C 75 25, 105 105, 135 55 S 205 65, 225 28" fill="none" stroke="#fb923c" strokeWidth="4" strokeDasharray="8 8" />}
+        {isPower && <path d="M190 75 L205 50 L220 75" fill="none" stroke="#fb923c" strokeWidth="6" strokeLinecap="round" strokeLinejoin="round" />}
+        <circle cx="105" cy="35" r="13" fill="#fb923c" />
+        <line x1="105" y1="48" x2="105" y2="70" stroke="#fed7aa" strokeWidth="8" strokeLinecap="round" />
+        <line x1="105" y1="56" x2={isCore ? 64 : 76} y2={isCore ? 72 : 52} stroke="#fdba74" strokeWidth="7" strokeLinecap="round" />
+        <line x1="105" y1="56" x2={isCore ? 146 : 135} y2={isCore ? 72 : 52} stroke="#fdba74" strokeWidth="7" strokeLinecap="round" />
+        <line x1="105" y1="70" x2={isPower ? 78 : 86} y2={y} stroke="#fed7aa" strokeWidth="8" strokeLinecap="round" />
+        <line x1="105" y1="70" x2={isPower ? 132 : 124} y2={y} stroke="#fed7aa" strokeWidth="8" strokeLinecap="round" />
+        <circle cx="178" cy="78" r="12" fill="rgba(251,146,60,0.22)" stroke="#fb923c" strokeWidth="3" />
+        <text x="178" y="82" textAnchor="middle" fontSize="10" fill="#fed7aa" fontWeight="800">{exercise.category.slice(0, 3).toUpperCase()}</text>
+      </svg>
+    </div>
+  );
+}
+
+function MobilityDrillIllustration({ drill }: { drill: Pick<DbMobility, 'name' | 'target_area'> }) {
+  const target = drill.target_area;
+  const bend = target === 'hamstrings' ? 35 : target === 'ankles' ? 18 : target === 'shoulders' ? 80 : target === 'thoracic spine' ? 60 : 48;
+  return (
+    <div className="rounded-2xl border border-white/10 bg-orange-500/10 p-2">
+      <svg viewBox="0 0 240 92" className="h-20 w-full" role="img" aria-label={`${drill.name} stretch illustration`}>
+        <rect x="8" y="8" width="224" height="76" rx="16" fill="rgba(0,0,0,0.20)" />
+        <line x1="25" y1="74" x2="215" y2="74" stroke="rgba(255,255,255,0.2)" strokeWidth="3" />
+        <circle cx="94" cy="28" r="10" fill="#fb923c" />
+        <line x1="94" y1="39" x2={94 + bend * 0.35} y2="56" stroke="#fed7aa" strokeWidth="7" strokeLinecap="round" />
+        <line x1={94 + bend * 0.35} y1="56" x2={72 + bend * 0.4} y2="74" stroke="#fed7aa" strokeWidth="7" strokeLinecap="round" />
+        <line x1={94 + bend * 0.35} y1="56" x2={126 + bend * 0.5} y2="74" stroke="#fed7aa" strokeWidth="7" strokeLinecap="round" />
+        <line x1="102" y1="44" x2={72 + bend * 0.1} y2={32 + bend * 0.2} stroke="#fdba74" strokeWidth="6" strokeLinecap="round" />
+        <line x1="104" y1="44" x2={142 + bend * 0.5} y2={30 + bend * 0.1} stroke="#fdba74" strokeWidth="6" strokeLinecap="round" />
+        <text x="188" y="35" textAnchor="middle" fontSize="12" fill="#fed7aa" fontWeight="800">{target}</text>
+      </svg>
     </div>
   );
 }
