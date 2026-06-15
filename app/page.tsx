@@ -43,7 +43,9 @@ export default function HomePage() {
   const supabase = useMemo(() => createClient(), []);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [authMessage, setAuthMessage] = useState('Not signed in yet.');
+  const [authMessage, setAuthMessage] = useState('Sign in to start training.');
+  const [userId, setUserId] = useState<string | null>(null);
+  const [userEmail, setUserEmail] = useState<string | null>(null);
   const [exercises, setExercises] = useState<DbExercise[]>([]);
   const [mobility, setMobility] = useState<DbMobility[]>([]);
   const [goal, setGoal] = useState('MMA performance');
@@ -54,11 +56,15 @@ export default function HomePage() {
   const [generated, setGenerated] = useState<GeneratedExercise[]>([]);
   const [scores, setScores] = useState({ hips: 60, ankles: 60, shoulders: 60, thoracic: 60, hamstrings: 60 });
   const [saveMessage, setSaveMessage] = useState('');
+  const [workoutMessage, setWorkoutMessage] = useState('');
 
   useEffect(() => {
     async function loadData() {
       const { data: sessionData } = await supabase.auth.getSession();
-      setAuthMessage(sessionData.session?.user.email ? `Signed in as ${sessionData.session.user.email}` : 'Not signed in yet.');
+      const currentUser = sessionData.session?.user;
+      setUserId(currentUser?.id ?? null);
+      setUserEmail(currentUser?.email ?? null);
+      setAuthMessage(currentUser?.email ? `Welcome back, ${currentUser.email}` : 'Sign in to start training.');
 
       const [{ data: exerciseRows }, { data: mobilityRows }] = await Promise.all([
         supabase.from('exercises').select('*').order('name'),
@@ -77,23 +83,38 @@ export default function HomePage() {
   }
 
   async function signUp() {
-    setAuthMessage('Creating account...');
-    const { error } = await supabase.auth.signUp({ email, password, options: { data: { display_name: email.split('@')[0] } } });
-    setAuthMessage(error ? error.message : 'Account created. Check your email if confirmation is enabled, then sign in.');
+    setAuthMessage('Creating your account...');
+    const { error, data } = await supabase.auth.signUp({ email, password, options: { data: { display_name: email.split('@')[0] } } });
+    if (error) {
+      setAuthMessage(error.message);
+      return;
+    }
+    setUserId(data.session?.user.id ?? null);
+    setUserEmail(data.session?.user.email ?? null);
+    setAuthMessage(data.session ? 'Account created. You are signed in.' : 'Account created. Check your email, then sign in.');
   }
 
   async function signIn() {
     setAuthMessage('Signing in...');
     const { error, data } = await supabase.auth.signInWithPassword({ email, password });
-    setAuthMessage(error ? error.message : `Signed in as ${data.user.email}`);
+    if (error) {
+      setAuthMessage(error.message);
+      return;
+    }
+    setUserId(data.user.id);
+    setUserEmail(data.user.email ?? null);
+    setAuthMessage(`Welcome back, ${data.user.email}`);
   }
 
   async function signOut() {
     await supabase.auth.signOut();
+    setUserId(null);
+    setUserEmail(null);
+    setGenerated([]);
     setAuthMessage('Signed out.');
   }
 
-  function generateWorkout() {
+  function buildWorkout() {
     const scored = exercises
       .map((exercise) => {
         const hasEquipment = exercise.equipment_needed.some((item) => selectedEquipment.includes(item));
@@ -110,36 +131,79 @@ export default function HomePage() {
       .sort((a, b) => b.score - a.score);
 
     const count = duration <= 30 ? 4 : duration <= 45 ? 5 : 6;
-    setGenerated(
-      scored.slice(0, count).map(({ exercise }, index) => ({
-        ...exercise,
-        sets: recovery < 55 ? 2 : index === 0 ? 4 : 3,
-        reps: exercise.category === 'power' ? '3-5' : exercise.category === 'conditioning' ? '30-45 sec' : '8-12',
-        restSeconds: exercise.category === 'conditioning' ? 45 : exercise.category === 'power' ? 120 : 75,
-      })),
-    );
+    const nextWorkout = scored.slice(0, count).map(({ exercise }, index) => ({
+      ...exercise,
+      sets: recovery < 55 ? 2 : index === 0 ? 4 : 3,
+      reps: exercise.category === 'power' ? '3-5' : exercise.category === 'conditioning' ? '30-45 sec' : '8-12',
+      restSeconds: exercise.category === 'conditioning' ? 45 : exercise.category === 'power' ? 120 : 75,
+    }));
+
+    setGenerated(nextWorkout);
+    setWorkoutMessage(nextWorkout.length ? 'Workout generated. Save it when you like it.' : 'No exercises matched your equipment. Add more equipment or change your goal.');
+  }
+
+  async function saveWorkout() {
+    if (!userId) {
+      setWorkoutMessage('Sign in before saving workouts.');
+      return;
+    }
+    if (!generated.length) {
+      setWorkoutMessage('Generate a workout first.');
+      return;
+    }
+
+    setWorkoutMessage('Saving workout...');
+    const { data: workoutRow, error: workoutError } = await supabase
+      .from('workouts')
+      .insert({
+        user_id: userId,
+        title: `${goal} session`,
+        goal,
+        duration_minutes: duration,
+        recovery_score: recovery,
+        status: 'planned',
+      })
+      .select('id')
+      .single();
+
+    if (workoutError || !workoutRow) {
+      setWorkoutMessage(workoutError?.message ?? 'Workout could not be saved.');
+      return;
+    }
+
+    const rows = generated.map((exercise, index) => ({
+      workout_id: workoutRow.id,
+      exercise_id: exercise.id,
+      position: index + 1,
+      target_sets: exercise.sets,
+      target_reps: exercise.reps,
+      rest_seconds: exercise.restSeconds,
+      notes: `${exercise.category} · ${exercise.muscle_groups.join(', ')}`,
+    }));
+
+    const { error: exerciseError } = await supabase.from('workout_exercises').insert(rows);
+    setWorkoutMessage(exerciseError ? exerciseError.message : 'Workout saved to your account.');
   }
 
   async function saveMobilityAssessment() {
-    const { data } = await supabase.auth.getSession();
-    if (!data.session?.user) {
+    if (!userId) {
       setSaveMessage('Sign in before saving your mobility score.');
       return;
     }
 
     const overall = Math.round((scores.hips + scores.ankles + scores.shoulders + scores.thoracic + scores.hamstrings) / 5);
     const { error } = await supabase.from('mobility_assessments').insert({
-      user_id: data.session.user.id,
+      user_id: userId,
       overall_score: overall,
       hips_score: scores.hips,
       ankles_score: scores.ankles,
       shoulders_score: scores.shoulders,
       thoracic_score: scores.thoracic,
       hamstrings_score: scores.hamstrings,
-      notes: 'Phase 1 self calibration test',
+      notes: 'ForgeFit mobility calibration',
     });
 
-    setSaveMessage(error ? error.message : `Saved mobility score: ${overall}`);
+    setSaveMessage(error ? error.message : `Mobility score saved: ${overall}`);
   }
 
   const mobilityScore = Math.round((scores.hips + scores.ankles + scores.shoulders + scores.thoracic + scores.hamstrings) / 5);
@@ -152,40 +216,50 @@ export default function HomePage() {
     return false;
   });
 
+  if (!userId) {
+    return (
+      <main className="min-h-screen bg-forge-bg px-4 py-8 text-white">
+        <section className="mx-auto flex min-h-[90vh] max-w-md flex-col justify-center gap-6">
+          <div className="rounded-[2rem] border border-white/10 bg-white/5 p-6 shadow-2xl">
+            <p className="text-sm font-bold uppercase tracking-[0.25em] text-orange-300">ForgeFit</p>
+            <h1 className="mt-3 text-4xl font-black tracking-tight">Train smarter every day.</h1>
+            <p className="mt-3 text-sm leading-6 text-zinc-300">Sign in to generate workouts, save training sessions, track mobility, and build your personal exercise library.</p>
+          </div>
+
+          <section className="rounded-[2rem] border border-white/10 bg-forge-card p-5 shadow-2xl">
+            <h2 className="text-2xl font-black">Start training</h2>
+            <p className="mt-2 text-sm text-zinc-300">{authMessage}</p>
+            <div className="mt-5 flex flex-col gap-3">
+              <input className="rounded-2xl border border-white/10 bg-black/30 px-4 py-3 text-white outline-none focus:border-orange-400" placeholder="Email" value={email} onChange={(event) => setEmail(event.target.value)} />
+              <input className="rounded-2xl border border-white/10 bg-black/30 px-4 py-3 text-white outline-none focus:border-orange-400" placeholder="Password" type="password" value={password} onChange={(event) => setPassword(event.target.value)} />
+              <button onClick={signIn} className="rounded-2xl bg-orange-500 px-4 py-4 font-black text-black">Sign in</button>
+              <button onClick={signUp} className="rounded-2xl bg-white px-4 py-4 font-black text-black">Create account</button>
+            </div>
+          </section>
+        </section>
+      </main>
+    );
+  }
+
   return (
     <main className="min-h-screen bg-forge-bg px-4 py-5 text-white">
       <section className="mx-auto flex max-w-md flex-col gap-5 pb-24">
-        <header className="flex items-center justify-between">
+        <header className="flex items-center justify-between rounded-[2rem] border border-white/10 bg-white/5 p-5">
           <div>
-            <p className="text-sm text-orange-200/80">ForgeFit Phase 1</p>
-            <h1 className="text-3xl font-black tracking-tight">ForgeFit</h1>
+            <p className="text-sm text-orange-200/80">Welcome, {userEmail}</p>
+            <h1 className="text-3xl font-black tracking-tight">Today&apos;s plan</h1>
           </div>
-          <div className="rounded-2xl bg-orange-500 px-3 py-2 text-sm font-bold text-black">Live DB</div>
+          <button onClick={signOut} className="rounded-2xl bg-white/10 px-3 py-2 text-sm font-bold">Sign out</button>
         </header>
 
         <div className="grid grid-cols-2 gap-3">
           <Stat icon={<HeartPulse size={18} />} label="Recovery" value={String(recovery)} />
-          <Stat icon={<Flame size={18} />} label="Exercise DB" value={`${exercises.length}`} />
-          <Stat icon={<Dumbbell size={18} />} label="Generated" value={`${generated.length}`} />
+          <Stat icon={<Flame size={18} />} label="Library" value={`${exercises.length}`} />
+          <Stat icon={<Dumbbell size={18} />} label="Workout" value={`${generated.length} moves`} />
           <Stat icon={<Trophy size={18} />} label="Mobility" value={String(mobilityScore)} />
         </div>
 
-        <section className="rounded-3xl border border-white/10 bg-forge-card p-5 shadow-2xl">
-          <p className="text-sm font-semibold text-orange-300">Account</p>
-          <h2 className="mt-1 text-2xl font-black">Sign in or create account</h2>
-          <p className="mt-2 text-sm text-zinc-300">{authMessage}</p>
-          <div className="mt-4 flex flex-col gap-3">
-            <input className="rounded-2xl border border-white/10 bg-black/30 px-4 py-3 text-white" placeholder="Email" value={email} onChange={(event) => setEmail(event.target.value)} />
-            <input className="rounded-2xl border border-white/10 bg-black/30 px-4 py-3 text-white" placeholder="Password" type="password" value={password} onChange={(event) => setPassword(event.target.value)} />
-            <div className="grid grid-cols-3 gap-2">
-              <button onClick={signIn} className="rounded-2xl bg-orange-500 px-3 py-3 font-black text-black">Sign in</button>
-              <button onClick={signUp} className="rounded-2xl bg-white px-3 py-3 font-black text-black">Sign up</button>
-              <button onClick={signOut} className="rounded-2xl bg-white/10 px-3 py-3 font-black">Out</button>
-            </div>
-          </div>
-        </section>
-
-        <section className="rounded-3xl border border-white/10 bg-white/5 p-5">
+        <section className="rounded-[2rem] border border-white/10 bg-forge-card p-5 shadow-2xl">
           <p className="text-sm font-semibold text-orange-300">Workout generator</p>
           <h2 className="mt-1 text-2xl font-black">Build today&apos;s session</h2>
           <label className="mt-4 block text-sm font-bold">Goal</label>
@@ -211,7 +285,12 @@ export default function HomePage() {
             ))}
           </div>
 
-          <button onClick={generateWorkout} className="mt-5 w-full rounded-2xl bg-orange-500 px-4 py-4 font-black text-black">Generate workout</button>
+          <div className="mt-5 grid grid-cols-2 gap-2">
+            <button onClick={buildWorkout} className="rounded-2xl bg-orange-500 px-4 py-4 font-black text-black">Generate</button>
+            <button onClick={saveWorkout} className="rounded-2xl bg-white px-4 py-4 font-black text-black">Save</button>
+          </div>
+          {workoutMessage && <p className="mt-3 text-sm text-orange-200">{workoutMessage}</p>}
+
           <div className="mt-4 flex flex-col gap-3">
             {generated.map((exercise) => (
               <article key={exercise.id} className="rounded-2xl bg-black/25 p-4">
@@ -228,9 +307,9 @@ export default function HomePage() {
           </div>
         </section>
 
-        <section className="rounded-3xl border border-white/10 bg-white/5 p-5">
-          <p className="text-sm font-semibold text-orange-300">Workout database</p>
-          <h2 className="mt-1 text-xl font-black">Exercise library from Supabase</h2>
+        <section className="rounded-[2rem] border border-white/10 bg-white/5 p-5">
+          <p className="text-sm font-semibold text-orange-300">Exercise library</p>
+          <h2 className="mt-1 text-xl font-black">Available movements</h2>
           <div className="mt-4 flex flex-col gap-2">
             {exercises.slice(0, 18).map((exercise) => (
               <div key={exercise.id} className="rounded-2xl bg-black/25 px-4 py-3">
@@ -241,15 +320,16 @@ export default function HomePage() {
           </div>
         </section>
 
-        <section className="rounded-3xl border border-white/10 bg-white/5 p-5">
+        <section className="rounded-[2rem] border border-white/10 bg-white/5 p-5">
           <p className="text-sm font-semibold text-orange-300">Mobility calibration</p>
           <h2 className="mt-1 text-xl font-black">Score: {mobilityScore}</h2>
+          <p className="mt-2 text-sm text-zinc-300">Move each slider based on how restricted that area feels today. Low scores trigger more drills for that area.</p>
           <MobilitySlider label="Hips" value={scores.hips} onChange={(value) => setScores({ ...scores, hips: value })} />
           <MobilitySlider label="Ankles" value={scores.ankles} onChange={(value) => setScores({ ...scores, ankles: value })} />
           <MobilitySlider label="Shoulders" value={scores.shoulders} onChange={(value) => setScores({ ...scores, shoulders: value })} />
           <MobilitySlider label="Thoracic spine" value={scores.thoracic} onChange={(value) => setScores({ ...scores, thoracic: value })} />
           <MobilitySlider label="Hamstrings" value={scores.hamstrings} onChange={(value) => setScores({ ...scores, hamstrings: value })} />
-          <button onClick={saveMobilityAssessment} className="mt-5 w-full rounded-2xl bg-orange-500 px-4 py-4 font-black text-black">Save mobility test</button>
+          <button onClick={saveMobilityAssessment} className="mt-5 w-full rounded-2xl bg-orange-500 px-4 py-4 font-black text-black">Save mobility score</button>
           {saveMessage && <p className="mt-3 text-sm text-orange-200">{saveMessage}</p>}
           <h3 className="mt-5 font-black">Recommended mobility</h3>
           <div className="mt-3 flex flex-col gap-2">
@@ -271,7 +351,7 @@ export default function HomePage() {
 
 function Stat({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {
   return (
-    <div className="rounded-3xl border border-white/10 bg-white/5 p-4">
+    <div className="rounded-[1.5rem] border border-white/10 bg-white/5 p-4">
       <div className="mb-3 text-orange-300">{icon}</div>
       <p className="text-xs text-zinc-400">{label}</p>
       <p className="text-lg font-black">{value}</p>
