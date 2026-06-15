@@ -53,6 +53,7 @@ const tabs: { key: TabKey; label: string }[] = [
 const goalOptions = ['MMA performance', 'Build muscle', 'Gain strength', 'Lose fat', 'Athletic performance', 'Improve conditioning'];
 const equipmentOptions = ['bodyweight', 'dumbbell', 'machine', 'cable', 'smith machine', 'resistance band', 'bench', 'bar', 'box'];
 const muscleOptions = ['back', 'legs', 'core', 'shoulders', 'chest', 'glutes', 'hamstrings', 'quads'];
+const originalGowodGlobal = 89;
 
 const originalGowodScores: Record<Area, number> = {
   Shoulders: 91,
@@ -107,14 +108,13 @@ export default function HomePage() {
   const [generated, setGenerated] = useState<GeneratedExercise[]>([]);
   const [scores, setScores] = useState<Record<string, number>>(initialScores);
   const [source, setSource] = useState<SourceKey>('gowod');
-  const [gowodGlobal, setGowodGlobal] = useState(89);
   const [gowodAdjustments, setGowodAdjustments] = useState<Record<Area, number>>(originalGowodScores);
   const [activeTab, setActiveTab] = useState<TabKey>('train');
   const [workoutMessage, setWorkoutMessage] = useState('');
 
   const forgefitAreaScores = getForgefitAreaScores(scores);
   const activeAreaScores = source === 'gowod' ? getGowodAreaScores(gowodAdjustments) : forgefitAreaScores;
-  const mobilityAverage = source === 'gowod' ? gowodGlobal : Math.round(activeAreaScores.reduce((total, item) => total + item.score, 0) / activeAreaScores.length);
+  const mobilityAverage = source === 'gowod' ? getAdjustedGowodGlobal(gowodAdjustments) : Math.round(activeAreaScores.reduce((total, item) => total + item.score, 0) / activeAreaScores.length);
   const weakestAreas = [...activeAreaScores].sort((a, b) => a.score - b.score).slice(0, 2).map((item) => item.area);
   const weakestTargets = weakestAreas.map((area) => targetByArea[area]);
   const recommendedDrills = mobility
@@ -306,18 +306,13 @@ export default function HomePage() {
 
         {activeTab === 'mobility' && (
           <section className="flex flex-col gap-5">
-            <Panel title="Mobility score" eyebrow="Adjustable GOWOD result">
+            <Panel title="Mobility score" eyebrow="GOWOD recalculates from sliders">
               <div className="flex items-center justify-center py-3">
                 <div className="flex h-36 w-36 items-center justify-center rounded-full border-[10px] border-emerald-400 text-center">
                   <div><p className="text-5xl font-black">{mobilityAverage}</p><p className="text-sm text-zinc-300">global</p></div>
                 </div>
               </div>
-              {source === 'gowod' && (
-                <label className="mb-4 block rounded-2xl bg-black/25 p-3">
-                  <div className="flex items-center justify-between text-sm"><span className="font-black text-orange-300">Global score</span><span>{gowodGlobal}</span></div>
-                  <input className="mt-2 w-full" type="range" min="0" max="100" value={gowodGlobal} onChange={(event) => setGowodGlobal(Number(event.target.value))} />
-                </label>
-              )}
+              <p className="mb-4 rounded-2xl bg-black/25 p-3 text-sm text-zinc-300">Global score is now calculated from the current area sliders. Original screenshot values show 89. If you move an area slider, this number changes.</p>
               <div className="grid grid-cols-3 gap-2">
                 {activeAreaScores.map((item) => (
                   <ScoreBar
@@ -330,7 +325,7 @@ export default function HomePage() {
                 ))}
               </div>
               {source === 'gowod' && (
-                <button onClick={() => { setGowodGlobal(89); setGowodAdjustments(originalGowodScores); }} className="mt-3 w-full rounded-2xl bg-white/10 px-4 py-3 text-sm font-black text-white">Reset to screenshot scores</button>
+                <button onClick={() => setGowodAdjustments(originalGowodScores)} className="mt-3 w-full rounded-2xl bg-white/10 px-4 py-3 text-sm font-black text-white">Reset to screenshot scores</button>
               )}
               <div className="mt-4 grid grid-cols-2 gap-2">
                 <button onClick={() => setSource('gowod')} className={`rounded-2xl px-3 py-3 text-sm font-black ${source === 'gowod' ? 'bg-orange-500 text-black' : 'bg-white/10 text-white'}`}>Use GOWOD</button>
@@ -377,6 +372,12 @@ function getForgefitAreaScores(scores: Record<string, number>) {
 
 function getGowodAreaScores(scores: Record<Area, number>) {
   return (Object.entries(scores) as [Area, number][]).map(([area, score]) => ({ area, score }));
+}
+
+function getAdjustedGowodGlobal(scores: Record<Area, number>) {
+  const originalAverage = Math.round(Object.values(originalGowodScores).reduce((total, score) => total + score, 0) / Object.values(originalGowodScores).length);
+  const currentAverage = Math.round(Object.values(scores).reduce((total, score) => total + score, 0) / Object.values(scores).length);
+  return Math.max(0, Math.min(100, Math.round(originalGowodGlobal + (currentAverage - originalAverage))));
 }
 
 function Panel({ eyebrow, title, children }: { eyebrow: string; title: string; children: ReactNode }) {
