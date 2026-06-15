@@ -29,6 +29,9 @@ type TabKey = 'train' | 'mobility' | 'library' | 'history';
 type SourceKey = 'gowod' | 'forgefit';
 type Area = 'Shoulders' | 'Overhead' | 'Thorax' | 'Hips' | 'Postchain' | 'Ankles';
 type Pose = 'squat' | 'toeTouch' | 'ankleWall' | 'overheadReach' | 'thoracicTwist' | 'hip90' | 'lunge' | 'wallSlide' | 'legRaise' | 'seatedFold';
+type SplitKey = 'full' | 'push' | 'pull' | 'legs' | 'upper' | 'lower' | 'ppl' | 'mma';
+type MobilityMode = 'pre' | 'post' | 'daily' | 'recovery';
+type MobilityActivity = 'lifting' | 'legs' | 'push' | 'pull' | 'running' | 'mma' | 'general';
 
 type MobilityTest = {
   id: string;
@@ -55,6 +58,17 @@ const equipmentOptions = ['bodyweight', 'dumbbell', 'machine', 'cable', 'smith m
 const muscleOptions = ['back', 'legs', 'core', 'shoulders', 'chest', 'glutes', 'hamstrings', 'quads'];
 const originalGowodGlobal = 89;
 
+const splitOptions: { key: SplitKey; label: string; muscles: string[]; activity: MobilityActivity }[] = [
+  { key: 'full', label: 'Full body', muscles: ['back', 'legs', 'core', 'shoulders', 'chest', 'glutes'], activity: 'lifting' },
+  { key: 'push', label: 'Push', muscles: ['chest', 'shoulders', 'core'], activity: 'push' },
+  { key: 'pull', label: 'Pull', muscles: ['back', 'shoulders', 'core'], activity: 'pull' },
+  { key: 'legs', label: 'Legs', muscles: ['legs', 'glutes', 'hamstrings', 'quads', 'core'], activity: 'legs' },
+  { key: 'upper', label: 'Upper', muscles: ['back', 'chest', 'shoulders', 'core'], activity: 'lifting' },
+  { key: 'lower', label: 'Lower', muscles: ['legs', 'glutes', 'hamstrings', 'quads'], activity: 'legs' },
+  { key: 'ppl', label: 'PPL rotation', muscles: ['chest', 'back', 'shoulders', 'legs', 'core'], activity: 'lifting' },
+  { key: 'mma', label: 'MMA hybrid', muscles: ['back', 'legs', 'core', 'shoulders', 'glutes', 'hamstrings'], activity: 'mma' },
+];
+
 const originalGowodScores: Record<Area, number> = {
   Shoulders: 91,
   Overhead: 88,
@@ -71,6 +85,16 @@ const targetByArea: Record<Area, string> = {
   Hips: 'hips',
   Postchain: 'hamstrings',
   Ankles: 'ankles',
+};
+
+const activityAreaBoosts: Record<MobilityActivity, Area[]> = {
+  lifting: ['Hips', 'Thorax', 'Shoulders', 'Postchain'],
+  legs: ['Postchain', 'Hips', 'Ankles'],
+  push: ['Shoulders', 'Overhead', 'Thorax'],
+  pull: ['Thorax', 'Shoulders', 'Postchain'],
+  running: ['Ankles', 'Postchain', 'Hips'],
+  mma: ['Hips', 'Thorax', 'Shoulders', 'Postchain', 'Ankles'],
+  general: ['Postchain', 'Hips', 'Shoulders'],
 };
 
 const mobilityTests: MobilityTest[] = [
@@ -103,23 +127,25 @@ export default function HomePage() {
   const [goal, setGoal] = useState('MMA performance');
   const [duration, setDuration] = useState(45);
   const [recovery, setRecovery] = useState(75);
+  const [split, setSplit] = useState<SplitKey>('mma');
   const [selectedEquipment, setSelectedEquipment] = useState<string[]>(['bodyweight', 'dumbbell', 'machine', 'cable', 'smith machine']);
   const [priorities, setPriorities] = useState<string[]>(['back', 'legs', 'core', 'shoulders']);
   const [generated, setGenerated] = useState<GeneratedExercise[]>([]);
   const [scores, setScores] = useState<Record<string, number>>(initialScores);
   const [source, setSource] = useState<SourceKey>('gowod');
   const [gowodAdjustments, setGowodAdjustments] = useState<Record<Area, number>>(originalGowodScores);
+  const [mobilityMode, setMobilityMode] = useState<MobilityMode>('pre');
+  const [mobilityActivity, setMobilityActivity] = useState<MobilityActivity>('mma');
+  const [mobilityMinutes, setMobilityMinutes] = useState(8);
   const [activeTab, setActiveTab] = useState<TabKey>('train');
   const [workoutMessage, setWorkoutMessage] = useState('');
 
   const forgefitAreaScores = getForgefitAreaScores(scores);
   const activeAreaScores = source === 'gowod' ? getGowodAreaScores(gowodAdjustments) : forgefitAreaScores;
   const mobilityAverage = source === 'gowod' ? getAdjustedGowodGlobal(gowodAdjustments) : Math.round(activeAreaScores.reduce((total, item) => total + item.score, 0) / activeAreaScores.length);
-  const weakestAreas = [...activeAreaScores].sort((a, b) => a.score - b.score).slice(0, 2).map((item) => item.area);
-  const weakestTargets = weakestAreas.map((area) => targetByArea[area]);
-  const recommendedDrills = mobility
-    .filter((drill) => weakestTargets.some((target) => drill.target_area === target || drill.name.toLowerCase().includes(target) || (target === 'hamstrings' && drill.name.toLowerCase().includes('calf'))))
-    .slice(0, 8);
+  const routinePlan = buildMobilityRoutine(activeAreaScores, mobility, mobilityActivity, mobilityMode, mobilityMinutes);
+  const weakestAreas = routinePlan.weakestAreas;
+  const recommendedDrills = routinePlan.drills;
 
   useEffect(() => {
     async function loadData() {
@@ -179,6 +205,13 @@ export default function HomePage() {
     setAuthMessage('Signed out.');
   }
 
+  function applySplit(nextSplit: SplitKey) {
+    const selected = splitOptions.find((option) => option.key === nextSplit) ?? splitOptions[0];
+    setSplit(nextSplit);
+    setPriorities(selected.muscles);
+    setMobilityActivity(selected.activity);
+  }
+
   function toggle(list: string[], value: string, setter: (next: string[]) => void) {
     setter(list.includes(value) ? list.filter((item) => item !== value) : [...list, value]);
   }
@@ -189,8 +222,11 @@ export default function HomePage() {
         const hasEquipment = exercise.equipment_needed.some((item) => selectedEquipment.includes(item));
         if (!hasEquipment) return { exercise, score: -999 };
         let score = 10;
-        score += exercise.muscle_groups.filter((muscle) => priorities.includes(muscle)).length * 4;
+        score += exercise.muscle_groups.filter((muscle) => priorities.includes(muscle)).length * 5;
         if (goal.toLowerCase().includes('mma') && ['power', 'conditioning', 'core'].includes(exercise.category)) score += 5;
+        if (split === 'legs' || split === 'lower') score += exercise.muscle_groups.some((m) => ['legs', 'glutes', 'hamstrings', 'quads'].includes(m)) ? 5 : -4;
+        if (split === 'push') score += exercise.muscle_groups.some((m) => ['chest', 'shoulders'].includes(m)) ? 5 : -4;
+        if (split === 'pull') score += exercise.muscle_groups.some((m) => ['back'].includes(m)) ? 6 : -3;
         if (goal.toLowerCase().includes('strength') && exercise.category === 'strength') score += 5;
         if (goal.toLowerCase().includes('muscle') && exercise.category === 'hypertrophy') score += 5;
         if (goal.toLowerCase().includes('conditioning') && exercise.category === 'conditioning') score += 6;
@@ -221,7 +257,7 @@ export default function HomePage() {
 
     const { data: workoutRow, error: workoutError } = await supabase
       .from('workouts')
-      .insert({ user_id: userId, title: `${goal} session`, goal, duration_minutes: duration, recovery_score: recovery, status: 'planned' })
+      .insert({ user_id: userId, title: `${goal} ${split} session`, goal, duration_minutes: duration, recovery_score: recovery, status: 'planned' })
       .select('id')
       .single();
 
@@ -270,7 +306,7 @@ export default function HomePage() {
             <div>
               <p className="text-sm text-orange-200/80">Welcome, {userEmail}</p>
               <h1 className="mt-1 text-3xl font-black tracking-tight">Today&apos;s plan</h1>
-              <p className="mt-2 text-sm text-zinc-300">Adaptive training plus GOWOD-informed mobility.</p>
+              <p className="mt-2 text-sm text-zinc-300">Adaptive training, split focus, and GOWOD-style mobility.</p>
             </div>
             <button onClick={signOut} className="rounded-2xl bg-white/10 px-3 py-2 text-sm font-bold">Sign out</button>
           </div>
@@ -291,6 +327,16 @@ export default function HomePage() {
               <select value={goal} onChange={(event) => setGoal(event.target.value)} className="mt-2 w-full rounded-2xl border border-white/10 bg-black/40 px-4 py-3">
                 {goalOptions.map((option) => <option key={option}>{option}</option>)}
               </select>
+
+              <div className="mt-4">
+                <p className="text-xs font-bold uppercase tracking-[0.18em] text-zinc-400">Split / focus</p>
+                <div className="mt-2 grid grid-cols-2 gap-2">
+                  {splitOptions.map((option) => (
+                    <button key={option.key} onClick={() => applySplit(option.key)} className={`rounded-2xl px-3 py-3 text-xs font-black ${split === option.key ? 'bg-orange-500 text-black' : 'bg-white/10 text-white'}`}>{option.label}</button>
+                  ))}
+                </div>
+              </div>
+
               <div className="mt-4 grid grid-cols-2 gap-3">
                 <label className="rounded-2xl bg-black/30 p-3"><span className="text-xs text-zinc-400">Minutes</span><input type="number" min="20" max="90" value={duration} onChange={(event) => setDuration(Number(event.target.value))} className="mt-1 w-full bg-transparent text-2xl font-black outline-none" /></label>
                 <label className="rounded-2xl bg-black/30 p-3"><span className="text-xs text-zinc-400">Recovery</span><input type="number" min="1" max="100" value={recovery} onChange={(event) => setRecovery(Number(event.target.value))} className="mt-1 w-full bg-transparent text-2xl font-black outline-none" /></label>
@@ -306,36 +352,39 @@ export default function HomePage() {
 
         {activeTab === 'mobility' && (
           <section className="flex flex-col gap-5">
-            <Panel title="Mobility score" eyebrow="GOWOD recalculates from sliders">
+            <Panel title="Mobility score" eyebrow="GOWOD-style controls">
               <div className="flex items-center justify-center py-3">
                 <div className="flex h-36 w-36 items-center justify-center rounded-full border-[10px] border-emerald-400 text-center">
                   <div><p className="text-5xl font-black">{mobilityAverage}</p><p className="text-sm text-zinc-300">global</p></div>
                 </div>
               </div>
-              <p className="mb-4 rounded-2xl bg-black/25 p-3 text-sm text-zinc-300">Global score is now calculated from the current area sliders. Original screenshot values show 89. If you move an area slider, this number changes.</p>
               <div className="grid grid-cols-3 gap-2">
                 {activeAreaScores.map((item) => (
-                  <ScoreBar
-                    key={item.area}
-                    area={item.area}
-                    score={item.score}
-                    editable={source === 'gowod'}
-                    onChange={(next) => setGowodAdjustments({ ...gowodAdjustments, [item.area]: next })}
-                  />
+                  <ScoreBar key={item.area} area={item.area} score={item.score} editable={source === 'gowod'} onChange={(next) => setGowodAdjustments({ ...gowodAdjustments, [item.area]: next })} />
                 ))}
               </div>
-              {source === 'gowod' && (
-                <button onClick={() => setGowodAdjustments(originalGowodScores)} className="mt-3 w-full rounded-2xl bg-white/10 px-4 py-3 text-sm font-black text-white">Reset to screenshot scores</button>
-              )}
+              {source === 'gowod' && <button onClick={() => setGowodAdjustments(originalGowodScores)} className="mt-3 w-full rounded-2xl bg-white/10 px-4 py-3 text-sm font-black text-white">Reset to screenshot scores</button>}
               <div className="mt-4 grid grid-cols-2 gap-2">
                 <button onClick={() => setSource('gowod')} className={`rounded-2xl px-3 py-3 text-sm font-black ${source === 'gowod' ? 'bg-orange-500 text-black' : 'bg-white/10 text-white'}`}>Use GOWOD</button>
                 <button onClick={() => setSource('forgefit')} className={`rounded-2xl px-3 py-3 text-sm font-black ${source === 'forgefit' ? 'bg-orange-500 text-black' : 'bg-white/10 text-white'}`}>Use sliders</button>
               </div>
-              <p className="mt-3 text-sm text-zinc-300">Selected source: <span className="font-black text-orange-300">{source === 'gowod' ? 'adjustable GOWOD scores' : 'ForgeFit slider test'}</span>. Recommendations below use this source.</p>
+            </Panel>
+
+            <Panel title="Routine builder" eyebrow="Like GOWOD flow">
+              <p className="text-sm text-zinc-300">Pick when you are doing mobility and what you are training. The routine uses your current weakest scores plus this context.</p>
+              <div className="mt-4 grid grid-cols-2 gap-2">
+                {[['pre','Pre-workout'],['post','Post-workout'],['daily','Daily'],['recovery','Recovery']].map(([key,label]) => <button key={key} onClick={() => setMobilityMode(key as MobilityMode)} className={`rounded-2xl px-3 py-3 text-xs font-black ${mobilityMode === key ? 'bg-orange-500 text-black' : 'bg-white/10 text-white'}`}>{label}</button>)}
+              </div>
+              <div className="mt-4 grid grid-cols-2 gap-2">
+                {[['lifting','Lifting'],['legs','Leg day'],['push','Push'],['pull','Pull'],['running','Running'],['mma','MMA/BJJ'],['general','General']].map(([key,label]) => <button key={key} onClick={() => setMobilityActivity(key as MobilityActivity)} className={`rounded-2xl px-3 py-3 text-xs font-black ${mobilityActivity === key ? 'bg-white text-black' : 'bg-white/10 text-white'}`}>{label}</button>)}
+              </div>
+              <div className="mt-4 grid grid-cols-4 gap-2">
+                {[5,8,12,15].map((minute) => <button key={minute} onClick={() => setMobilityMinutes(minute)} className={`rounded-2xl px-2 py-3 text-xs font-black ${mobilityMinutes === minute ? 'bg-orange-500 text-black' : 'bg-white/10 text-white'}`}>{minute}m</button>)}
+              </div>
             </Panel>
 
             <Panel title="Routine priority" eyebrow="Actually adapting">
-              <p className="text-sm text-zinc-300">Your lowest selected area is <span className="font-black text-orange-300">{weakestAreas[0]}</span>, so the routine prioritizes that area first. If you adjust a GOWOD slider, this changes immediately.</p>
+              <p className="text-sm text-zinc-300">Current priority: <span className="font-black text-orange-300">{weakestAreas.join(' + ')}</span>. Mode: <span className="font-black text-orange-300">{mobilityMode}</span>. Activity: <span className="font-black text-orange-300">{mobilityActivity}</span>.</p>
             </Panel>
 
             {source === 'forgefit' && mobilityTests.map((test) => (
@@ -347,9 +396,9 @@ export default function HomePage() {
               </article>
             ))}
 
-            <Panel title="Recommended routine" eyebrow="Based on selected source">
+            <Panel title={`Recommended ${mobilityMinutes} min routine`} eyebrow="Based on selected source + mode + activity">
               <div className="flex flex-col gap-3">
-                {(recommendedDrills.length ? recommendedDrills : mobility.slice(0, 8)).map((drill) => <div key={drill.id} className="rounded-2xl bg-black/25 p-4"><p className="text-xs font-bold text-orange-300">{drill.target_area} · {Math.max(1, Math.round(drill.duration_seconds / 60))} min</p><h3 className="font-black">{drill.name}</h3><p className="mt-1 text-sm text-zinc-400">{drill.instructions?.[0] ?? 'Move slowly, breathe, and stay out of sharp pain.'}</p></div>)}
+                {(recommendedDrills.length ? recommendedDrills : mobility.slice(0, 8)).map((drill, index) => <div key={drill.id} className="rounded-2xl bg-black/25 p-4"><p className="text-xs font-bold text-orange-300">Step {index + 1} · {drill.target_area} · {Math.max(1, Math.round((mobilityMinutes * 60) / Math.max(1, recommendedDrills.length || 6)))} sec</p><h3 className="font-black">{drill.name}</h3><p className="mt-1 text-sm text-zinc-400">{drill.instructions?.[0] ?? 'Move slowly, breathe, and stay out of sharp pain.'}</p></div>)}
               </div>
             </Panel>
           </section>
@@ -360,6 +409,33 @@ export default function HomePage() {
       </section>
     </main>
   );
+}
+
+function buildMobilityRoutine(areaScores: { area: Area; score: number }[], drills: DbMobility[], activity: MobilityActivity, mode: MobilityMode, minutes: number) {
+  const boosts = activityAreaBoosts[activity];
+  const scoredAreas = areaScores
+    .map((item) => ({ ...item, priority: (100 - item.score) + (boosts.includes(item.area) ? 20 : 0) + (mode === 'recovery' && item.score < 70 ? 12 : 0) }))
+    .sort((a, b) => b.priority - a.priority);
+  const weakestAreas = scoredAreas.slice(0, mode === 'daily' ? 3 : 2).map((item) => item.area);
+  const targets = weakestAreas.map((area) => targetByArea[area]);
+  const count = minutes <= 5 ? 4 : minutes <= 8 ? 5 : minutes <= 12 ? 6 : 8;
+  const ranked = drills
+    .map((drill) => {
+      let score = 0;
+      targets.forEach((target, index) => {
+        if (drill.target_area === target || drill.name.toLowerCase().includes(target)) score += 40 - index * 8;
+        if (target === 'hamstrings' && (drill.name.toLowerCase().includes('calf') || drill.name.toLowerCase().includes('hamstring') || drill.name.toLowerCase().includes('fold'))) score += 25;
+      });
+      if (mode === 'pre' && drill.duration_seconds <= 90) score += 8;
+      if (mode === 'post' && drill.duration_seconds >= 60) score += 8;
+      if (mode === 'recovery') score += 6;
+      return { drill, score };
+    })
+    .filter((item) => item.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, count)
+    .map((item) => item.drill);
+  return { weakestAreas, drills: ranked };
 }
 
 function getForgefitAreaScores(scores: Record<string, number>) {
