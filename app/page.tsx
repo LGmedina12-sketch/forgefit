@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { createClient } from '@/lib/supabase/client';
 
 type DbExercise = {
@@ -26,7 +26,7 @@ type DbMobility = {
 type GeneratedExercise = DbExercise & { sets: number; reps: string; restSeconds: number };
 type SavedWorkout = { id: string; title: string; goal: string; duration_minutes: number; recovery_score: number | null; status: string; created_at: string };
 type TabKey = 'train' | 'mobility' | 'library' | 'history';
-type Pose = 'squat' | 'toeTouch' | 'ankleWall' | 'overheadReach' | 'thoracicTwist' | 'hip90';
+type Pose = 'squat' | 'toeTouch' | 'ankleWall' | 'overheadReach' | 'thoracicTwist' | 'hip90' | 'lunge' | 'wallSlide' | 'legRaise' | 'seatedFold';
 
 type MobilityTest = {
   id: string;
@@ -37,6 +37,8 @@ type MobilityTest = {
   start: string;
   end: string;
   instruction: string;
+  cue: string;
+  fix: string;
 };
 
 const tabs: { key: TabKey; label: string }[] = [
@@ -51,12 +53,25 @@ const equipmentOptions = ['bodyweight', 'dumbbell', 'machine', 'cable', 'smith m
 const muscleOptions = ['back', 'legs', 'core', 'shoulders', 'chest', 'glutes', 'hamstrings', 'quads'];
 
 const mobilityTests: MobilityTest[] = [
-  { id: 'squat', title: 'Deep squat depth', area: 'Hips / ankles', target: 'hips', pose: 'squat', start: 'Tall squat', end: 'Deep squat', instruction: 'Move the slider to match how deep you can squat while both heels stay down.' },
-  { id: 'toe', title: 'Toe touch', area: 'Hamstrings', target: 'hamstrings', pose: 'toeTouch', start: 'Hands high', end: 'Hands to toes', instruction: 'Move the slider based on how close your hands get to your toes.' },
-  { id: 'ankle', title: 'Knee-to-wall', area: 'Ankles', target: 'ankles', pose: 'ankleWall', start: 'Knee far', end: 'Knee near wall', instruction: 'Move the slider based on how far your knee travels while your heel stays planted.' },
-  { id: 'overhead', title: 'Overhead reach', area: 'Shoulders', target: 'shoulders', pose: 'overheadReach', start: 'Arms forward', end: 'Arms overhead', instruction: 'Move the slider based on how high your arms reach without arching your back.' },
-  { id: 'twist', title: 'Open-book rotation', area: 'Upper back', target: 'thoracic spine', pose: 'thoracicTwist', start: 'Small turn', end: 'Full open chest', instruction: 'Move the slider based on how far your chest can rotate.' },
-  { id: 'hip90', title: '90/90 hip switch', area: 'Hips', target: 'hips', pose: 'hip90', start: 'Blocked hips', end: 'Smooth switch', instruction: 'Move the slider based on how close you can get to a clean 90/90 position.' },
+  { id: 'hips-squat', title: 'Deep squat depth', area: 'Hips', target: 'hips', pose: 'squat', start: 'High squat', end: 'Deep squat', instruction: 'Stand shoulder-width, feet flat, then sink as low as you can without your heels lifting.', cue: 'Knees track over toes, chest stays tall, heels stay down.', fix: 'If this scores low, prioritize squat pries, 90/90 switches, and ankle work.' },
+  { id: 'hips-9090', title: '90/90 hip switch', area: 'Hips', target: 'hips', pose: 'hip90', start: 'Closed hips', end: 'Open 90/90', instruction: 'Sit in a 90/90 position and rate how cleanly both hips can rotate without using your hands.', cue: 'Both knees bent, tall chest, rotate from the hip instead of twisting your spine.', fix: 'If this scores low, use 90/90 switches, pigeon, and figure-four work.' },
+  { id: 'hips-lunge', title: 'Hip flexor lunge', area: 'Hips', target: 'hips', pose: 'lunge', start: 'Short lunge', end: 'Long hip stretch', instruction: 'Half-kneel, tuck your pelvis slightly, then slide forward until you feel the front hip open.', cue: 'Back glute squeezed, ribs down, front knee stacked over the foot.', fix: 'If this scores low, use couch stretch, lizard, and hip flexor rocks.' },
+
+  { id: 'ankles-wall', title: 'Knee-to-wall', area: 'Ankles', target: 'ankles', pose: 'ankleWall', start: 'Knee far', end: 'Knee near wall', instruction: 'Keep your heel planted and drive your knee toward the wall without collapsing the arch.', cue: 'Heel glued down, knee tracks over the second/third toe.', fix: 'If this scores low, do knee-to-wall rocks and calf wall stretches.' },
+  { id: 'ankles-squat', title: 'Heel-down squat', area: 'Ankles', target: 'ankles', pose: 'squat', start: 'Heels lift', end: 'Heels planted', instruction: 'Squat while trying to keep both heels heavy on the floor.', cue: 'Weight through mid-foot, knees forward, torso relaxed but controlled.', fix: 'If this scores low, combine ankle rocks with deep squat holds.' },
+  { id: 'ankles-calf', title: 'Straight-leg calf range', area: 'Ankles', target: 'ankles', pose: 'ankleWall', start: 'Tight calf', end: 'Good dorsiflexion', instruction: 'With the back leg straighter, lean toward a wall while keeping the heel down.', cue: 'Back knee almost straight, heel down, toes forward.', fix: 'If this scores low, use calf wall stretch and down-dog pedals.' },
+
+  { id: 'shoulders-overhead', title: 'Overhead reach', area: 'Shoulders', target: 'shoulders', pose: 'overheadReach', start: 'Arms forward', end: 'Stacked overhead', instruction: 'Reach both arms overhead without flaring ribs or arching your lower back.', cue: 'Ribs down, biceps near ears, neck relaxed.', fix: 'If this scores low, do wall slides, lat reach, and shoulder flexion work.' },
+  { id: 'shoulders-wall', title: 'Wall slide', area: 'Shoulders', target: 'shoulders', pose: 'wallSlide', start: 'Low slide', end: 'High smooth slide', instruction: 'Back against a wall, slide elbows and wrists upward while keeping control.', cue: 'Do not shrug; keep ribs down and move slowly.', fix: 'If this scores low, use wall slides and doorway pec stretches.' },
+  { id: 'shoulders-pec', title: 'Pec doorway opener', area: 'Shoulders', target: 'shoulders', pose: 'overheadReach', start: 'Tight chest', end: 'Open shoulder', instruction: 'Place your forearm against a doorway and turn your chest away until the front shoulder opens.', cue: 'Shoulder stays down, chest rotates gently, no pinching.', fix: 'If this scores low, add doorway pec stretch before upper-body training.' },
+
+  { id: 'thoracic-openbook', title: 'Open-book rotation', area: 'Upper back', target: 'thoracic spine', pose: 'thoracicTwist', start: 'Small turn', end: 'Open chest', instruction: 'Lie on your side, knees stacked, and rotate the top arm open while the knees stay down.', cue: 'Move from the upper back, not the low back.', fix: 'If this scores low, use open books and side-lying windmills.' },
+  { id: 'thoracic-thread', title: 'Thread the needle', area: 'Upper back', target: 'thoracic spine', pose: 'thoracicTwist', start: 'Tight twist', end: 'Full reach', instruction: 'From all fours, reach one arm under your body, then open back up through the upper back.', cue: 'Hips stay square, shoulder reaches long, breathe into the twist.', fix: 'If this scores low, use thread-the-needle and cat-cow first.' },
+  { id: 'thoracic-wall', title: 'Wall rotation check', area: 'Upper back', target: 'thoracic spine', pose: 'thoracicTwist', start: 'Closed chest', end: 'Chest opens', instruction: 'Stand near a wall and rotate your chest open without twisting your hips.', cue: 'Pelvis stays forward; chest and shoulders do the moving.', fix: 'If this scores low, add thoracic windmills and open books.' },
+
+  { id: 'hamstrings-toe', title: 'Toe touch', area: 'Hamstrings', target: 'hamstrings', pose: 'toeTouch', start: 'Hands high', end: 'Touch toes', instruction: 'Hinge forward and rate how close your hands get to your toes without forcing it.', cue: 'Soft knees, long spine, fold from the hips.', fix: 'If this scores low, use hamstring flosses and squat-to-hamstring reaches.' },
+  { id: 'hamstrings-leg', title: 'Straight-leg raise', area: 'Hamstrings', target: 'hamstrings', pose: 'legRaise', start: 'Low raise', end: 'High raise', instruction: 'Lie down and lift one straight leg while the other leg stays on the floor.', cue: 'Knee mostly straight, opposite leg flat, pelvis does not roll.', fix: 'If this scores low, use hamstring floss and calf/hamstring mobility.' },
+  { id: 'hamstrings-seated', title: 'Seated fold', area: 'Hamstrings', target: 'hamstrings', pose: 'seatedFold', start: 'Upright', end: 'Forward fold', instruction: 'Sit tall with legs forward and fold from the hips toward your feet.', cue: 'Reach chest forward first, then hands; do not just round the spine.', fix: 'If this scores low, use seated straddle fold and hamstring floss.' },
 ];
 
 const initialScores = mobilityTests.reduce((acc, test) => ({ ...acc, [test.id]: 60 }), {} as Record<string, number>);
@@ -82,10 +97,15 @@ export default function HomePage() {
   const [workoutMessage, setWorkoutMessage] = useState('');
 
   const mobilityAverage = Math.round(mobilityTests.reduce((total, test) => total + scores[test.id], 0) / mobilityTests.length);
-  const weakestTests = [...mobilityTests].sort((a, b) => scores[a.id] - scores[b.id]).slice(0, 2);
+  const areaScores = Array.from(new Set(mobilityTests.map((test) => test.area))).map((area) => {
+    const tests = mobilityTests.filter((test) => test.area === area);
+    return { area, score: Math.round(tests.reduce((total, test) => total + scores[test.id], 0) / tests.length) };
+  }).sort((a, b) => a.score - b.score);
+  const weakestAreas = areaScores.slice(0, 2).map((item) => item.area);
+  const weakestTargets = mobilityTests.filter((test) => weakestAreas.includes(test.area)).map((test) => test.target);
   const recommendedDrills = mobility
-    .filter((drill) => weakestTests.some((test) => drill.target_area === test.target || drill.name.toLowerCase().includes(test.target)))
-    .slice(0, 5);
+    .filter((drill) => weakestTargets.some((target) => drill.target_area === target || drill.name.toLowerCase().includes(target)))
+    .slice(0, 6);
 
   useEffect(() => {
     async function loadData() {
@@ -236,7 +256,7 @@ export default function HomePage() {
             <div>
               <p className="text-sm text-orange-200/80">Welcome, {userEmail}</p>
               <h1 className="mt-1 text-3xl font-black tracking-tight">Today&apos;s plan</h1>
-              <p className="mt-2 text-sm text-zinc-300">Adaptive training plus animated Mobility V2 calibration.</p>
+              <p className="mt-2 text-sm text-zinc-300">Adaptive training plus deeper animated mobility calibration.</p>
             </div>
             <button onClick={signOut} className="rounded-2xl bg-white/10 px-3 py-2 text-sm font-bold">Sign out</button>
           </div>
@@ -281,13 +301,9 @@ export default function HomePage() {
                 <div className="flex flex-col gap-3">
                   {generated.map((exercise, index) => (
                     <article key={exercise.id} className="rounded-2xl border border-white/10 bg-black/25 p-4">
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <p className="text-xs text-orange-300">#{index + 1} · {exercise.category}</p>
-                          <h3 className="text-lg font-black">{exercise.name}</h3>
-                          <p className="text-sm text-zinc-300">{exercise.sets} sets · {exercise.reps} reps · rest {exercise.restSeconds}s</p>
-                        </div>
-                      </div>
+                      <p className="text-xs text-orange-300">#{index + 1} · {exercise.category}</p>
+                      <h3 className="text-lg font-black">{exercise.name}</h3>
+                      <p className="text-sm text-zinc-300">{exercise.sets} sets · {exercise.reps} reps · rest {exercise.restSeconds}s</p>
                       <p className="mt-2 text-sm text-zinc-400">{exercise.instructions?.[0] ?? 'Move with control.'}</p>
                     </article>
                   ))}
@@ -300,11 +316,14 @@ export default function HomePage() {
 
         {activeTab === 'mobility' && (
           <section className="flex flex-col gap-5">
-            <Panel title="Animated calibration" eyebrow="Mobility V2">
+            <Panel title="Animated calibration" eyebrow="Mobility V2 expanded">
               <div className="rounded-2xl bg-black/30 p-4">
                 <p className="text-sm text-zinc-400">Live mobility score</p>
                 <p className="text-5xl font-black text-orange-300">{mobilityAverage}</p>
-                <p className="mt-2 text-sm text-zinc-300">Focus next: {weakestTests.map((item) => item.area).join(' + ')}</p>
+                <p className="mt-2 text-sm text-zinc-300">Weakest areas: {areaScores.slice(0, 2).map((item) => `${item.area} ${item.score}`).join(' + ')}</p>
+              </div>
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                {areaScores.map((item) => <div key={item.area} className="rounded-2xl bg-black/25 p-3"><p className="text-xs text-zinc-400">{item.area}</p><p className="text-xl font-black">{item.score}</p></div>)}
               </div>
             </Panel>
 
@@ -317,6 +336,11 @@ export default function HomePage() {
                     <p className="mt-1 text-sm text-zinc-300">{test.instruction}</p>
                   </div>
                   <span className="rounded-full bg-orange-500 px-3 py-1 text-sm font-black text-black">{scores[test.id]}</span>
+                </div>
+
+                <div className="mt-3 rounded-2xl bg-black/25 p-3 text-sm text-zinc-300">
+                  <p><span className="font-black text-orange-300">Cue:</span> {test.cue}</p>
+                  <p className="mt-1"><span className="font-black text-orange-300">Improve it:</span> {test.fix}</p>
                 </div>
 
                 <div className="mt-4 grid grid-cols-2 gap-2">
@@ -334,11 +358,11 @@ export default function HomePage() {
 
             <Panel title="Recommended routine" eyebrow="Based on weakest areas">
               <div className="flex flex-col gap-3">
-                {(recommendedDrills.length ? recommendedDrills : mobility.slice(0, 5)).map((drill) => (
+                {(recommendedDrills.length ? recommendedDrills : mobility.slice(0, 6)).map((drill) => (
                   <div key={drill.id} className="rounded-2xl bg-black/25 p-4">
-                    <p className="text-xs font-bold text-orange-300">{drill.target_area} · {Math.round(drill.duration_seconds / 60)} min</p>
+                    <p className="text-xs font-bold text-orange-300">{drill.target_area} · {Math.max(1, Math.round(drill.duration_seconds / 60))} min</p>
                     <h3 className="font-black">{drill.name}</h3>
-                    <p className="mt-1 text-sm text-zinc-400">{drill.instructions?.[0] ?? 'Move slowly and breathe.'}</p>
+                    <p className="mt-1 text-sm text-zinc-400">{drill.instructions?.[0] ?? 'Move slowly, breathe, and stay out of sharp pain.'}</p>
                   </div>
                 ))}
               </div>
@@ -377,7 +401,7 @@ export default function HomePage() {
   );
 }
 
-function Panel({ eyebrow, title, children }: { eyebrow: string; title: string; children: React.ReactNode }) {
+function Panel({ eyebrow, title, children }: { eyebrow: string; title: string; children: ReactNode }) {
   return (
     <section className="rounded-[2rem] border border-white/10 bg-white/5 p-5">
       <p className="text-sm font-semibold text-orange-300">{eyebrow}</p>
@@ -408,56 +432,100 @@ function PoseArt({ pose, value, label, small = false }: { pose: Pose; value: num
   const skin = '#fed7aa';
   const head = '#fb923c';
   const limb = '#fdba74';
+  const guide = 'rgba(251,146,60,.45)';
 
   return (
     <div className="rounded-2xl border border-white/10 bg-black/30 p-2">
       <svg viewBox="0 0 260 160" className="w-full" style={{ height }} role="img" aria-label={label}>
         <rect x="8" y="8" width="244" height="144" rx="22" fill="rgba(255,255,255,.04)" />
         <line x1="22" y1="132" x2="238" y2="132" stroke="rgba(255,255,255,.22)" strokeWidth="4" />
-        {pose === 'squat' && <Squat p={p} skin={skin} head={head} limb={limb} />}
-        {pose === 'toeTouch' && <ToeTouch p={p} skin={skin} head={head} limb={limb} />}
-        {pose === 'ankleWall' && <AnkleWall p={p} skin={skin} head={head} limb={limb} />}
-        {pose === 'overheadReach' && <OverheadReach p={p} skin={skin} head={head} limb={limb} />}
-        {pose === 'thoracicTwist' && <ThoracicTwist p={p} skin={skin} head={head} limb={limb} />}
-        {pose === 'hip90' && <Hip90 p={p} skin={skin} head={head} limb={limb} />}
+        {pose === 'squat' && <Squat p={p} skin={skin} head={head} limb={limb} guide={guide} />}
+        {pose === 'toeTouch' && <ToeTouch p={p} skin={skin} head={head} limb={limb} guide={guide} />}
+        {pose === 'ankleWall' && <AnkleWall p={p} skin={skin} head={head} limb={limb} guide={guide} />}
+        {pose === 'overheadReach' && <OverheadReach p={p} skin={skin} head={head} limb={limb} guide={guide} />}
+        {pose === 'wallSlide' && <WallSlide p={p} skin={skin} head={head} limb={limb} guide={guide} />}
+        {pose === 'thoracicTwist' && <ThoracicTwist p={p} skin={skin} head={head} limb={limb} guide={guide} />}
+        {pose === 'hip90' && <Hip90 p={p} skin={skin} head={head} limb={limb} guide={guide} />}
+        {pose === 'lunge' && <Lunge p={p} skin={skin} head={head} limb={limb} guide={guide} />}
+        {pose === 'legRaise' && <LegRaise p={p} skin={skin} head={head} limb={limb} guide={guide} />}
+        {pose === 'seatedFold' && <SeatedFold p={p} skin={skin} head={head} limb={limb} guide={guide} />}
       </svg>
       <div className="mt-1 flex items-center justify-between text-[10px]"><span className="text-zinc-400">{label}</span><span className="font-black text-orange-300">{Math.round(p)}%</span></div>
     </div>
   );
 }
 
-function Squat({ p, skin, head, limb }: { p: number; skin: string; head: string; limb: string }) {
+function Joint({ x, y }: { x: number; y: number }) {
+  return <circle cx={x} cy={y} r="3.5" fill="#080a0f" stroke="#fdba74" strokeWidth="2" />;
+}
+
+function Squat({ p, skin, head, limb, guide }: { p: number; skin: string; head: string; limb: string; guide: string }) {
   const hipY = 62 + p * 0.52;
   const headY = 32 + p * 0.18;
-  const kneeDrop = p * 0.26;
-  return <><circle cx="130" cy={headY} r="13" fill={head} /><line x1="130" y1={headY + 15} x2="130" y2={hipY} stroke={skin} strokeWidth="9" strokeLinecap="round" /><line x1="130" y1={hipY} x2={92 - p * 0.28} y2={104 + kneeDrop} stroke={skin} strokeWidth="9" strokeLinecap="round" /><line x1={92 - p * 0.28} y1={104 + kneeDrop} x2="66" y2="132" stroke={skin} strokeWidth="9" strokeLinecap="round" /><line x1="130" y1={hipY} x2={168 + p * 0.28} y2={104 + kneeDrop} stroke={skin} strokeWidth="9" strokeLinecap="round" /><line x1={168 + p * 0.28} y1={104 + kneeDrop} x2="194" y2="132" stroke={skin} strokeWidth="9" strokeLinecap="round" /><line x1="128" y1={headY + 30} x2="82" y2={66 + p * 0.45} stroke={limb} strokeWidth="8" strokeLinecap="round" /><line x1="132" y1={headY + 30} x2="178" y2={66 + p * 0.45} stroke={limb} strokeWidth="8" strokeLinecap="round" /></>;
+  const leftKneeX = 92 - p * 0.28;
+  const rightKneeX = 168 + p * 0.28;
+  const kneeY = 104 + p * 0.26;
+  return <><path d={`M72 ${kneeY} C100 ${kneeY - 28}, 160 ${kneeY - 28}, 188 ${kneeY}`} stroke={guide} strokeWidth="3" fill="none" strokeDasharray="6 6" /><circle cx="130" cy={headY} r="13" fill={head} /><line x1="130" y1={headY + 15} x2="130" y2={hipY} stroke={skin} strokeWidth="9" strokeLinecap="round" /><line x1="130" y1={hipY} x2={leftKneeX} y2={kneeY} stroke={skin} strokeWidth="9" strokeLinecap="round" /><line x1={leftKneeX} y1={kneeY} x2="66" y2="132" stroke={skin} strokeWidth="9" strokeLinecap="round" /><line x1="130" y1={hipY} x2={rightKneeX} y2={kneeY} stroke={skin} strokeWidth="9" strokeLinecap="round" /><line x1={rightKneeX} y1={kneeY} x2="194" y2="132" stroke={skin} strokeWidth="9" strokeLinecap="round" /><line x1="128" y1={headY + 30} x2="82" y2={66 + p * 0.45} stroke={limb} strokeWidth="8" strokeLinecap="round" /><line x1="132" y1={headY + 30} x2="178" y2={66 + p * 0.45} stroke={limb} strokeWidth="8" strokeLinecap="round" /><Joint x={leftKneeX} y={kneeY} /><Joint x={rightKneeX} y={kneeY} /></>;
 }
 
-function ToeTouch({ p, skin, head, limb }: { p: number; skin: string; head: string; limb: string }) {
-  const torsoEndX = 114 + p * 0.72;
-  const torsoEndY = 66 + p * 0.47;
-  const headX = 100 + p * 0.52;
+function ToeTouch({ p, skin, head, limb, guide }: { p: number; skin: string; head: string; limb: string; guide: string }) {
+  const hipX = 86;
+  const hipY = 74;
+  const shoulderX = 116 + p * 0.68;
+  const shoulderY = 66 + p * 0.47;
+  const headX = 100 + p * 0.54;
   const headY = 42 + p * 0.42;
-  return <><circle cx={headX} cy={headY} r="13" fill={head} /><line x1="86" y1="72" x2={torsoEndX} y2={torsoEndY} stroke={skin} strokeWidth="9" strokeLinecap="round" /><line x1="86" y1="72" x2="58" y2="132" stroke={skin} strokeWidth="9" strokeLinecap="round" /><line x1="86" y1="72" x2="204" y2="132" stroke={skin} strokeWidth="9" strokeLinecap="round" /><line x1={torsoEndX} y1={torsoEndY} x2={124 + p * 0.78} y2={82 + p * 0.50} stroke={limb} strokeWidth="8" strokeLinecap="round" /><line x1={torsoEndX} y1={torsoEndY} x2={132 + p * 0.78} y2={86 + p * 0.48} stroke={limb} strokeWidth="8" strokeLinecap="round" /></>;
+  const handX = 128 + p * 0.80;
+  const handY = 82 + p * 0.48;
+  return <><path d={`M88 56 C130 ${68 + p * .2}, 164 ${92 + p * .25}, 202 132`} stroke={guide} strokeWidth="3" fill="none" strokeDasharray="6 6" /><circle cx={headX} cy={headY} r="13" fill={head} /><line x1={hipX} y1={hipY} x2={shoulderX} y2={shoulderY} stroke={skin} strokeWidth="9" strokeLinecap="round" /><line x1={hipX} y1={hipY} x2="58" y2="132" stroke={skin} strokeWidth="9" strokeLinecap="round" /><line x1={hipX} y1={hipY} x2="204" y2="132" stroke={skin} strokeWidth="9" strokeLinecap="round" /><line x1={shoulderX} y1={shoulderY} x2={handX} y2={handY} stroke={limb} strokeWidth="8" strokeLinecap="round" /><line x1={shoulderX} y1={shoulderY} x2={handX + 10} y2={handY + 4} stroke={limb} strokeWidth="8" strokeLinecap="round" /><Joint x={hipX} y={hipY} /></>;
 }
 
-function AnkleWall({ p, skin, head, limb }: { p: number; skin: string; head: string; limb: string }) {
+function AnkleWall({ p, skin, head, limb, guide }: { p: number; skin: string; head: string; limb: string; guide: string }) {
   const kneeX = 92 + p * 1.18;
-  return <><line x1="220" y1="18" x2="220" y2="136" stroke="rgba(255,255,255,.26)" strokeWidth="7" /><circle cx="72" cy="42" r="13" fill={head} /><line x1="72" y1="56" x2="104" y2="82" stroke={skin} strokeWidth="9" strokeLinecap="round" /><line x1="104" y1="82" x2={kneeX} y2="108" stroke={skin} strokeWidth="9" strokeLinecap="round" /><line x1={kneeX} y1="108" x2="164" y2="132" stroke={skin} strokeWidth="9" strokeLinecap="round" /><line x1="104" y1="82" x2="48" y2="132" stroke={skin} strokeWidth="9" strokeLinecap="round" /><line x1="96" y1="62" x2="206" y2="60" stroke={limb} strokeWidth="8" strokeLinecap="round" /></>;
+  return <><line x1="220" y1="18" x2="220" y2="136" stroke="rgba(255,255,255,.26)" strokeWidth="7" /><path d={`M96 108 C140 88, 185 78, 220 76`} stroke={guide} strokeWidth="3" fill="none" strokeDasharray="6 6" /><circle cx="72" cy="42" r="13" fill={head} /><line x1="72" y1="56" x2="104" y2="82" stroke={skin} strokeWidth="9" strokeLinecap="round" /><line x1="104" y1="82" x2={kneeX} y2="108" stroke={skin} strokeWidth="9" strokeLinecap="round" /><line x1={kneeX} y1="108" x2="164" y2="132" stroke={skin} strokeWidth="9" strokeLinecap="round" /><line x1="104" y1="82" x2="48" y2="132" stroke={skin} strokeWidth="9" strokeLinecap="round" /><line x1="96" y1="62" x2="206" y2="60" stroke={limb} strokeWidth="8" strokeLinecap="round" /><Joint x={kneeX} y={108} /></>;
 }
 
-function OverheadReach({ p, skin, head, limb }: { p: number; skin: string; head: string; limb: string }) {
+function OverheadReach({ p, skin, head, limb, guide }: { p: number; skin: string; head: string; limb: string; guide: string }) {
   const handY = 104 - p * 0.88;
-  return <><circle cx="130" cy="48" r="13" fill={head} /><line x1="130" y1="62" x2="130" y2="98" stroke={skin} strokeWidth="9" strokeLinecap="round" /><line x1="130" y1="72" x2="88" y2={handY} stroke={limb} strokeWidth="8" strokeLinecap="round" /><line x1="130" y1="72" x2="172" y2={handY} stroke={limb} strokeWidth="8" strokeLinecap="round" /><line x1="130" y1="98" x2="100" y2="132" stroke={skin} strokeWidth="9" strokeLinecap="round" /><line x1="130" y1="98" x2="160" y2="132" stroke={skin} strokeWidth="9" strokeLinecap="round" /></>;
+  return <><path d={`M80 106 C92 ${70 - p * .2}, 106 36, 130 22`} stroke={guide} strokeWidth="3" fill="none" strokeDasharray="6 6" /><circle cx="130" cy="48" r="13" fill={head} /><line x1="130" y1="62" x2="130" y2="98" stroke={skin} strokeWidth="9" strokeLinecap="round" /><line x1="130" y1="72" x2="88" y2={handY} stroke={limb} strokeWidth="8" strokeLinecap="round" /><line x1="130" y1="72" x2="172" y2={handY} stroke={limb} strokeWidth="8" strokeLinecap="round" /><line x1="130" y1="98" x2="100" y2="132" stroke={skin} strokeWidth="9" strokeLinecap="round" /><line x1="130" y1="98" x2="160" y2="132" stroke={skin} strokeWidth="9" strokeLinecap="round" /><Joint x={88} y={handY} /><Joint x={172} y={handY} /></>;
 }
 
-function ThoracicTwist({ p, skin, head, limb }: { p: number; skin: string; head: string; limb: string }) {
+function WallSlide({ p, skin, head, limb, guide }: { p: number; skin: string; head: string; limb: string; guide: string }) {
+  const elbowY = 102 - p * 0.72;
+  const wristY = 106 - p * 0.92;
+  return <><line x1="218" y1="18" x2="218" y2="138" stroke="rgba(255,255,255,.26)" strokeWidth="7" /><path d={`M98 108 C112 ${86 - p * .25}, 145 ${60 - p * .3}, 178 28`} stroke={guide} strokeWidth="3" fill="none" strokeDasharray="6 6" /><circle cx="130" cy="50" r="13" fill={head} /><line x1="130" y1="64" x2="130" y2="100" stroke={skin} strokeWidth="9" strokeLinecap="round" /><line x1="130" y1="74" x2="100" y2={elbowY} stroke={limb} strokeWidth="8" strokeLinecap="round" /><line x1="100" y1={elbowY} x2="92" y2={wristY} stroke={limb} strokeWidth="8" strokeLinecap="round" /><line x1="130" y1="74" x2="160" y2={elbowY} stroke={limb} strokeWidth="8" strokeLinecap="round" /><line x1="160" y1={elbowY} x2="168" y2={wristY} stroke={limb} strokeWidth="8" strokeLinecap="round" /><line x1="130" y1="100" x2="102" y2="132" stroke={skin} strokeWidth="9" strokeLinecap="round" /><line x1="130" y1="100" x2="158" y2="132" stroke={skin} strokeWidth="9" strokeLinecap="round" /><Joint x={100} y={elbowY} /><Joint x={160} y={elbowY} /></>;
+}
+
+function ThoracicTwist({ p, skin, head, limb, guide }: { p: number; skin: string; head: string; limb: string; guide: string }) {
   const reachX = 92 + p * 1.25;
   const reachY = 84 - p * 0.40;
-  return <><circle cx="78" cy="62" r="13" fill={head} /><line x1="90" y1="72" x2="136" y2="96" stroke={skin} strokeWidth="9" strokeLinecap="round" /><line x1="136" y1="96" x2="78" y2="132" stroke={skin} strokeWidth="9" strokeLinecap="round" /><line x1="136" y1="96" x2="184" y2="132" stroke={skin} strokeWidth="9" strokeLinecap="round" /><line x1="110" y1="82" x2="54" y2="96" stroke={limb} strokeWidth="8" strokeLinecap="round" /><line x1="112" y1="82" x2={reachX} y2={reachY} stroke={limb} strokeWidth="8" strokeLinecap="round" /><path d={`M86 86 C 124 ${76 - p * .25}, 170 ${66 - p * .25}, 220 50`} fill="none" stroke="rgba(251,146,60,.55)" strokeWidth="4" strokeDasharray="7 7" /></>;
+  return <><path d={`M86 86 C124 ${76 - p * .25}, 170 ${66 - p * .25}, 220 50`} fill="none" stroke={guide} strokeWidth="4" strokeDasharray="7 7" /><circle cx="78" cy="62" r="13" fill={head} /><line x1="90" y1="72" x2="136" y2="96" stroke={skin} strokeWidth="9" strokeLinecap="round" /><line x1="136" y1="96" x2="78" y2="132" stroke={skin} strokeWidth="9" strokeLinecap="round" /><line x1="136" y1="96" x2="184" y2="132" stroke={skin} strokeWidth="9" strokeLinecap="round" /><line x1="110" y1="82" x2="54" y2="96" stroke={limb} strokeWidth="8" strokeLinecap="round" /><line x1="112" y1="82" x2={reachX} y2={reachY} stroke={limb} strokeWidth="8" strokeLinecap="round" /><Joint x={reachX} y={reachY} /></>;
 }
 
-function Hip90({ p, skin, head, limb }: { p: number; skin: string; head: string; limb: string }) {
+function Hip90({ p, skin, head, limb, guide }: { p: number; skin: string; head: string; limb: string; guide: string }) {
   const open = p * 0.68;
-  return <><circle cx="128" cy="52" r="13" fill={head} /><line x1="128" y1="66" x2="128" y2="92" stroke={skin} strokeWidth="9" strokeLinecap="round" /><line x1="128" y1="94" x2={82 - open * 0.52} y2={110 - open * 0.16} stroke={skin} strokeWidth="9" strokeLinecap="round" /><line x1={82 - open * 0.52} y1={110 - open * 0.16} x2="52" y2="132" stroke={skin} strokeWidth="9" strokeLinecap="round" /><line x1="128" y1="94" x2={168 + open * 0.68} y2={110 - open * 0.28} stroke={skin} strokeWidth="9" strokeLinecap="round" /><line x1={168 + open * 0.68} y1={110 - open * 0.28} x2="218" y2="126" stroke={skin} strokeWidth="9" strokeLinecap="round" /><line x1="126" y1="76" x2="92" y2="72" stroke={limb} strokeWidth="8" strokeLinecap="round" /><line x1="130" y1="76" x2="166" y2="72" stroke={limb} strokeWidth="8" strokeLinecap="round" /></>;
+  const leftKneeX = 82 - open * 0.52;
+  const leftKneeY = 110 - open * 0.16;
+  const rightKneeX = 168 + open * 0.68;
+  const rightKneeY = 110 - open * 0.28;
+  return <><path d={`M58 126 C100 ${112 - p * .2}, 160 ${112 - p * .25}, 218 104`} stroke={guide} strokeWidth="3" fill="none" strokeDasharray="6 6" /><circle cx="128" cy="52" r="13" fill={head} /><line x1="128" y1="66" x2="128" y2="92" stroke={skin} strokeWidth="9" strokeLinecap="round" /><line x1="128" y1="94" x2={leftKneeX} y2={leftKneeY} stroke={skin} strokeWidth="9" strokeLinecap="round" /><line x1={leftKneeX} y1={leftKneeY} x2="52" y2="132" stroke={skin} strokeWidth="9" strokeLinecap="round" /><line x1="128" y1="94" x2={rightKneeX} y2={rightKneeY} stroke={skin} strokeWidth="9" strokeLinecap="round" /><line x1={rightKneeX} y1={rightKneeY} x2="218" y2="126" stroke={skin} strokeWidth="9" strokeLinecap="round" /><line x1="126" y1="76" x2="92" y2="72" stroke={limb} strokeWidth="8" strokeLinecap="round" /><line x1="130" y1="76" x2="166" y2="72" stroke={limb} strokeWidth="8" strokeLinecap="round" /><Joint x={leftKneeX} y={leftKneeY} /><Joint x={rightKneeX} y={rightKneeY} /></>;
+}
+
+function Lunge({ p, skin, head, limb, guide }: { p: number; skin: string; head: string; limb: string; guide: string }) {
+  const hipX = 128 + p * 0.2;
+  const hipY = 84 + p * 0.12;
+  const frontKneeX = 162 + p * 0.32;
+  const backKneeX = 88 - p * 0.22;
+  return <><path d={`M82 132 C120 ${116 - p * .15}, 170 ${104 - p * .2}, 210 92`} stroke={guide} strokeWidth="3" fill="none" strokeDasharray="6 6" /><circle cx="126" cy="44" r="13" fill={head} /><line x1="126" y1="58" x2={hipX} y2={hipY} stroke={skin} strokeWidth="9" strokeLinecap="round" /><line x1={hipX} y1={hipY} x2={frontKneeX} y2="110" stroke={skin} strokeWidth="9" strokeLinecap="round" /><line x1={frontKneeX} y1="110" x2="196" y2="132" stroke={skin} strokeWidth="9" strokeLinecap="round" /><line x1={hipX} y1={hipY} x2={backKneeX} y2="112" stroke={skin} strokeWidth="9" strokeLinecap="round" /><line x1={backKneeX} y1="112" x2="58" y2="132" stroke={skin} strokeWidth="9" strokeLinecap="round" /><line x1="126" y1="66" x2="92" y2="80" stroke={limb} strokeWidth="8" strokeLinecap="round" /><line x1="126" y1="66" x2="162" y2="78" stroke={limb} strokeWidth="8" strokeLinecap="round" /><Joint x={frontKneeX} y={110} /><Joint x={backKneeX} y={112} /></>;
+}
+
+function LegRaise({ p, skin, head, limb, guide }: { p: number; skin: string; head: string; limb: string; guide: string }) {
+  const footY = 132 - p * 0.94;
+  return <><path d={`M126 132 C134 ${104 - p * .3}, 156 ${82 - p * .5}, 186 42`} stroke={guide} strokeWidth="3" fill="none" strokeDasharray="6 6" /><circle cx="54" cy="104" r="12" fill={head} /><line x1="66" y1="108" x2="126" y2="124" stroke={skin} strokeWidth="9" strokeLinecap="round" /><line x1="126" y1="124" x2="210" y2="132" stroke={skin} strokeWidth="9" strokeLinecap="round" /><line x1="126" y1="124" x2="176" y2={footY} stroke={skin} strokeWidth="9" strokeLinecap="round" /><line x1="86" y1="112" x2="112" y2="98" stroke={limb} strokeWidth="8" strokeLinecap="round" /><Joint x={126} y={124} /></>;
+}
+
+function SeatedFold({ p, skin, head, limb, guide }: { p: number; skin: string; head: string; limb: string; guide: string }) {
+  const chestX = 104 + p * 0.70;
+  const chestY = 70 + p * 0.36;
+  return <><path d={`M92 64 C130 ${76 + p * .15}, 170 ${98 + p * .25}, 220 126`} stroke={guide} strokeWidth="3" fill="none" strokeDasharray="6 6" /><circle cx={92 + p * 0.45} cy={48 + p * 0.34} r="13" fill={head} /><line x1="86" y1="76" x2={chestX} y2={chestY} stroke={skin} strokeWidth="9" strokeLinecap="round" /><line x1="86" y1="76" x2="56" y2="132" stroke={skin} strokeWidth="9" strokeLinecap="round" /><line x1="86" y1="76" x2="214" y2="132" stroke={skin} strokeWidth="9" strokeLinecap="round" /><line x1={chestX} y1={chestY} x2={130 + p * .82} y2={86 + p * .40} stroke={limb} strokeWidth="8" strokeLinecap="round" /><line x1={chestX} y1={chestY} x2={140 + p * .78} y2={92 + p * .38} stroke={limb} strokeWidth="8" strokeLinecap="round" /></>;
 }
