@@ -54,7 +54,7 @@ const tabs: { key: TabKey; label: string }[] = [
 ];
 
 const goalOptions = ['MMA performance', 'Build muscle', 'Gain strength', 'Lose fat', 'Athletic performance', 'Improve conditioning'];
-const equipmentOptions = ['bodyweight', 'dumbbell', 'machine', 'cable', 'smith machine', 'resistance band', 'bench', 'bar', 'box'];
+const equipmentOptions = ['bodyweight', 'dumbbell', 'machine', 'cable', 'smith machine', 'resistance band', 'bench', 'bar', 'box', 'medicine ball'];
 const muscleOptions = ['back', 'legs', 'core', 'shoulders', 'chest', 'glutes', 'hamstrings', 'quads'];
 const originalGowodGlobal = 89;
 
@@ -131,19 +131,22 @@ export default function HomePage() {
   const [selectedEquipment, setSelectedEquipment] = useState<string[]>(['bodyweight', 'dumbbell', 'machine', 'cable', 'smith machine']);
   const [priorities, setPriorities] = useState<string[]>(['back', 'legs', 'core', 'shoulders']);
   const [generated, setGenerated] = useState<GeneratedExercise[]>([]);
+  const [recentExerciseIds, setRecentExerciseIds] = useState<string[]>([]);
+  const [workoutRerolls, setWorkoutRerolls] = useState(0);
   const [scores, setScores] = useState<Record<string, number>>(initialScores);
   const [source, setSource] = useState<SourceKey>('gowod');
   const [gowodAdjustments, setGowodAdjustments] = useState<Record<Area, number>>(originalGowodScores);
   const [mobilityMode, setMobilityMode] = useState<MobilityMode>('pre');
   const [mobilityActivity, setMobilityActivity] = useState<MobilityActivity>('mma');
   const [mobilityMinutes, setMobilityMinutes] = useState(8);
+  const [routineShuffle, setRoutineShuffle] = useState(0);
   const [activeTab, setActiveTab] = useState<TabKey>('train');
   const [workoutMessage, setWorkoutMessage] = useState('');
 
   const forgefitAreaScores = getForgefitAreaScores(scores);
   const activeAreaScores = source === 'gowod' ? getGowodAreaScores(gowodAdjustments) : forgefitAreaScores;
   const mobilityAverage = source === 'gowod' ? getAdjustedGowodGlobal(gowodAdjustments) : Math.round(activeAreaScores.reduce((total, item) => total + item.score, 0) / activeAreaScores.length);
-  const routinePlan = buildMobilityRoutine(activeAreaScores, mobility, mobilityActivity, mobilityMode, mobilityMinutes);
+  const routinePlan = buildMobilityRoutine(activeAreaScores, mobility, mobilityActivity, mobilityMode, mobilityMinutes, routineShuffle);
   const weakestAreas = routinePlan.weakestAreas;
   const recommendedDrills = routinePlan.drills;
 
@@ -217,37 +220,64 @@ export default function HomePage() {
   }
 
   function buildWorkout() {
+    const reroll = workoutRerolls + 1;
+    const count = duration <= 30 ? 4 : duration <= 45 ? 5 : 6;
+    const goalText = goal.toLowerCase();
+    const splitTargets = splitOptions.find((option) => option.key === split)?.muscles ?? priorities;
+
     const scored = exercises
       .map((exercise) => {
         const hasEquipment = exercise.equipment_needed.some((item) => selectedEquipment.includes(item));
         if (!hasEquipment) return { exercise, score: -999 };
         let score = 10;
-        score += exercise.muscle_groups.filter((muscle) => priorities.includes(muscle)).length * 5;
-        if (goal.toLowerCase().includes('mma') && ['power', 'conditioning', 'core'].includes(exercise.category)) score += 5;
-        if (split === 'legs' || split === 'lower') score += exercise.muscle_groups.some((m) => ['legs', 'glutes', 'hamstrings', 'quads'].includes(m)) ? 5 : -4;
-        if (split === 'push') score += exercise.muscle_groups.some((m) => ['chest', 'shoulders'].includes(m)) ? 5 : -4;
-        if (split === 'pull') score += exercise.muscle_groups.some((m) => ['back'].includes(m)) ? 6 : -3;
-        if (goal.toLowerCase().includes('strength') && exercise.category === 'strength') score += 5;
-        if (goal.toLowerCase().includes('muscle') && exercise.category === 'hypertrophy') score += 5;
-        if (goal.toLowerCase().includes('conditioning') && exercise.category === 'conditioning') score += 6;
-        if (goal.toLowerCase().includes('lose') && ['conditioning', 'core'].includes(exercise.category)) score += 4;
-        if (goal.toLowerCase().includes('athletic') && ['power', 'conditioning'].includes(exercise.category)) score += 5;
-        if (recovery < 55 && exercise.difficulty === 'advanced') score -= 4;
+        score += exercise.muscle_groups.filter((muscle) => priorities.includes(muscle)).length * 4;
+        score += exercise.muscle_groups.filter((muscle) => splitTargets.includes(muscle)).length * 4;
+        if (goalText.includes('mma') && ['power', 'conditioning', 'core'].includes(exercise.category)) score += 6;
+        if (split === 'legs' || split === 'lower') score += exercise.muscle_groups.some((m) => ['legs', 'glutes', 'hamstrings', 'quads'].includes(m)) ? 7 : -4;
+        if (split === 'push') score += exercise.muscle_groups.some((m) => ['chest', 'shoulders'].includes(m)) ? 7 : -5;
+        if (split === 'pull') score += exercise.muscle_groups.some((m) => ['back'].includes(m)) ? 8 : -4;
+        if (goalText.includes('strength') && exercise.category === 'strength') score += 6;
+        if (goalText.includes('muscle') && exercise.category === 'hypertrophy') score += 6;
+        if (goalText.includes('conditioning') && exercise.category === 'conditioning') score += 7;
+        if (goalText.includes('lose') && ['conditioning', 'core'].includes(exercise.category)) score += 5;
+        if (goalText.includes('athletic') && ['power', 'conditioning'].includes(exercise.category)) score += 6;
+        if (recovery < 55 && exercise.difficulty === 'advanced') score -= 5;
+        if (recentExerciseIds.includes(exercise.id)) score -= 9;
+        score += Math.random() * 12;
         return { exercise, score };
       })
       .filter((item) => item.score > 0)
       .sort((a, b) => b.score - a.score);
 
-    const count = duration <= 30 ? 4 : duration <= 45 ? 5 : 6;
-    const nextWorkout = scored.slice(0, count).map(({ exercise }, index) => ({
+    const chosen: DbExercise[] = [];
+    const wantedCategories = getWorkoutCategoryPlan(split, goal, count);
+
+    wantedCategories.forEach((category) => {
+      const pool = scored.filter((item) => !chosen.some((picked) => picked.id === item.exercise.id) && (item.exercise.category === category || category === 'any'));
+      const fallbackPool = scored.filter((item) => !chosen.some((picked) => picked.id === item.exercise.id));
+      const usePool = pool.length ? pool : fallbackPool;
+      if (!usePool.length) return;
+      const pickWindow = usePool.slice(0, Math.min(6, usePool.length));
+      chosen.push(pickWindow[Math.floor(Math.random() * pickWindow.length)].exercise);
+    });
+
+    while (chosen.length < count) {
+      const pool = scored.filter((item) => !chosen.some((picked) => picked.id === item.exercise.id)).slice(0, 10);
+      if (!pool.length) break;
+      chosen.push(pool[Math.floor(Math.random() * pool.length)].exercise);
+    }
+
+    const nextWorkout = chosen.slice(0, count).map((exercise, index) => ({
       ...exercise,
-      sets: recovery < 55 ? 2 : goal.toLowerCase().includes('muscle') ? 4 : index === 0 ? 4 : 3,
-      reps: exercise.category === 'power' ? '3-5' : exercise.category === 'conditioning' ? '30-45 sec' : goal.toLowerCase().includes('strength') ? '4-6' : '8-12',
-      restSeconds: exercise.category === 'conditioning' ? 45 : exercise.category === 'power' || goal.toLowerCase().includes('strength') ? 120 : 75,
+      sets: recovery < 55 ? 2 : goalText.includes('muscle') ? 4 : index === 0 ? 4 : 3,
+      reps: exercise.category === 'power' ? '3-5' : exercise.category === 'conditioning' ? '30-45 sec' : goalText.includes('strength') ? '4-6' : '8-12',
+      restSeconds: exercise.category === 'conditioning' ? 45 : exercise.category === 'power' || goalText.includes('strength') ? 120 : 75,
     }));
 
     setGenerated(nextWorkout);
-    setWorkoutMessage(nextWorkout.length ? 'Workout generated. Save it when you like it.' : 'No exercises matched your equipment. Add more equipment or change your goal.');
+    setWorkoutRerolls(reroll);
+    setRecentExerciseIds((previous) => [...nextWorkout.map((exercise) => exercise.id), ...previous].slice(0, 14));
+    setWorkoutMessage(nextWorkout.length ? `Workout reroll #${reroll}. Press generate again if you do not like it.` : 'No exercises matched your equipment. Add more equipment or change your goal.');
   }
 
   async function saveWorkout() {
@@ -322,7 +352,7 @@ export default function HomePage() {
 
         {activeTab === 'train' && (
           <section className="flex flex-col gap-5">
-            <Panel title="Build today&apos;s workout" eyebrow="Adaptive generator">
+            <Panel title="Build today&apos;s workout" eyebrow="Adaptive reroll generator">
               <label className="text-xs font-bold uppercase tracking-[0.18em] text-zinc-400">Goal</label>
               <select value={goal} onChange={(event) => setGoal(event.target.value)} className="mt-2 w-full rounded-2xl border border-white/10 bg-black/40 px-4 py-3">
                 {goalOptions.map((option) => <option key={option}>{option}</option>)}
@@ -343,63 +373,37 @@ export default function HomePage() {
               </div>
               <Chooser title="Equipment" options={equipmentOptions} selected={selectedEquipment} onToggle={(value) => toggle(selectedEquipment, value, setSelectedEquipment)} />
               <Chooser title="Muscle focus" options={muscleOptions} selected={priorities} onToggle={(value) => toggle(priorities, value, setPriorities)} />
-              <button onClick={buildWorkout} className="mt-4 w-full rounded-2xl bg-orange-500 px-4 py-4 font-black text-black">Generate workout</button>
+              <button onClick={buildWorkout} className="mt-4 w-full rounded-2xl bg-orange-500 px-4 py-4 font-black text-black">Generate new workout</button>
+              <p className="mt-2 text-xs text-zinc-400">You can tap generate over and over. It rerolls exercise choices while still respecting your split, goal, recovery, equipment, and focus.</p>
               {workoutMessage && <p className="mt-3 text-sm text-orange-200">{workoutMessage}</p>}
             </Panel>
-            {!!generated.length && <Panel title="Generated workout" eyebrow="Today"><div className="flex flex-col gap-3">{generated.map((exercise, index) => <article key={exercise.id} className="rounded-2xl border border-white/10 bg-black/25 p-4"><p className="text-xs text-orange-300">#{index + 1} · {exercise.category}</p><h3 className="text-lg font-black">{exercise.name}</h3><p className="text-sm text-zinc-300">{exercise.sets} sets · {exercise.reps} reps · rest {exercise.restSeconds}s</p><p className="mt-2 text-sm text-zinc-400">{exercise.instructions?.[0] ?? 'Move with control.'}</p></article>)}</div><button onClick={saveWorkout} className="mt-4 w-full rounded-2xl bg-white px-4 py-4 font-black text-black">Save workout</button></Panel>}
+            {!!generated.length && <Panel title="Generated workout" eyebrow={`Reroll #${workoutRerolls}`}><div className="flex flex-col gap-3">{generated.map((exercise, index) => <article key={`${exercise.id}-${workoutRerolls}`} className="rounded-2xl border border-white/10 bg-black/25 p-4"><p className="text-xs text-orange-300">#{index + 1} · {exercise.category}</p><h3 className="text-lg font-black">{exercise.name}</h3><p className="text-sm text-zinc-300">{exercise.sets} sets · {exercise.reps} reps · rest {exercise.restSeconds}s</p><p className="mt-2 text-sm text-zinc-400">{exercise.instructions?.[0] ?? 'Move with control.'}</p></article>)}</div><button onClick={saveWorkout} className="mt-4 w-full rounded-2xl bg-white px-4 py-4 font-black text-black">Save workout</button></Panel>}
           </section>
         )}
 
         {activeTab === 'mobility' && (
           <section className="flex flex-col gap-5">
             <Panel title="Mobility score" eyebrow="GOWOD-style controls">
-              <div className="flex items-center justify-center py-3">
-                <div className="flex h-36 w-36 items-center justify-center rounded-full border-[10px] border-emerald-400 text-center">
-                  <div><p className="text-5xl font-black">{mobilityAverage}</p><p className="text-sm text-zinc-300">global</p></div>
-                </div>
-              </div>
-              <div className="grid grid-cols-3 gap-2">
-                {activeAreaScores.map((item) => (
-                  <ScoreBar key={item.area} area={item.area} score={item.score} editable={source === 'gowod'} onChange={(next) => setGowodAdjustments({ ...gowodAdjustments, [item.area]: next })} />
-                ))}
-              </div>
+              <div className="flex items-center justify-center py-3"><div className="flex h-36 w-36 items-center justify-center rounded-full border-[10px] border-emerald-400 text-center"><div><p className="text-5xl font-black">{mobilityAverage}</p><p className="text-sm text-zinc-300">global</p></div></div></div>
+              <div className="grid grid-cols-3 gap-2">{activeAreaScores.map((item) => <ScoreBar key={item.area} area={item.area} score={item.score} editable={source === 'gowod'} onChange={(next) => setGowodAdjustments({ ...gowodAdjustments, [item.area]: next })} />)}</div>
               {source === 'gowod' && <button onClick={() => setGowodAdjustments(originalGowodScores)} className="mt-3 w-full rounded-2xl bg-white/10 px-4 py-3 text-sm font-black text-white">Reset to screenshot scores</button>}
-              <div className="mt-4 grid grid-cols-2 gap-2">
-                <button onClick={() => setSource('gowod')} className={`rounded-2xl px-3 py-3 text-sm font-black ${source === 'gowod' ? 'bg-orange-500 text-black' : 'bg-white/10 text-white'}`}>Use GOWOD</button>
-                <button onClick={() => setSource('forgefit')} className={`rounded-2xl px-3 py-3 text-sm font-black ${source === 'forgefit' ? 'bg-orange-500 text-black' : 'bg-white/10 text-white'}`}>Use sliders</button>
-              </div>
+              <div className="mt-4 grid grid-cols-2 gap-2"><button onClick={() => setSource('gowod')} className={`rounded-2xl px-3 py-3 text-sm font-black ${source === 'gowod' ? 'bg-orange-500 text-black' : 'bg-white/10 text-white'}`}>Use GOWOD</button><button onClick={() => setSource('forgefit')} className={`rounded-2xl px-3 py-3 text-sm font-black ${source === 'forgefit' ? 'bg-orange-500 text-black' : 'bg-white/10 text-white'}`}>Use sliders</button></div>
             </Panel>
 
             <Panel title="Routine builder" eyebrow="Like GOWOD flow">
               <p className="text-sm text-zinc-300">Pick when you are doing mobility and what you are training. The routine uses your current weakest scores plus this context.</p>
-              <div className="mt-4 grid grid-cols-2 gap-2">
-                {[['pre','Pre-workout'],['post','Post-workout'],['daily','Daily'],['recovery','Recovery']].map(([key,label]) => <button key={key} onClick={() => setMobilityMode(key as MobilityMode)} className={`rounded-2xl px-3 py-3 text-xs font-black ${mobilityMode === key ? 'bg-orange-500 text-black' : 'bg-white/10 text-white'}`}>{label}</button>)}
-              </div>
-              <div className="mt-4 grid grid-cols-2 gap-2">
-                {[['lifting','Lifting'],['legs','Leg day'],['push','Push'],['pull','Pull'],['running','Running'],['mma','MMA/BJJ'],['general','General']].map(([key,label]) => <button key={key} onClick={() => setMobilityActivity(key as MobilityActivity)} className={`rounded-2xl px-3 py-3 text-xs font-black ${mobilityActivity === key ? 'bg-white text-black' : 'bg-white/10 text-white'}`}>{label}</button>)}
-              </div>
-              <div className="mt-4 grid grid-cols-4 gap-2">
-                {[5,8,12,15].map((minute) => <button key={minute} onClick={() => setMobilityMinutes(minute)} className={`rounded-2xl px-2 py-3 text-xs font-black ${mobilityMinutes === minute ? 'bg-orange-500 text-black' : 'bg-white/10 text-white'}`}>{minute}m</button>)}
-              </div>
+              <div className="mt-4 grid grid-cols-2 gap-2">{[['pre','Pre-workout'],['post','Post-workout'],['daily','Daily'],['recovery','Recovery']].map(([key,label]) => <button key={key} onClick={() => setMobilityMode(key as MobilityMode)} className={`rounded-2xl px-3 py-3 text-xs font-black ${mobilityMode === key ? 'bg-orange-500 text-black' : 'bg-white/10 text-white'}`}>{label}</button>)}</div>
+              <div className="mt-4 grid grid-cols-2 gap-2">{[['lifting','Lifting'],['legs','Leg day'],['push','Push'],['pull','Pull'],['running','Running'],['mma','MMA/BJJ'],['general','General']].map(([key,label]) => <button key={key} onClick={() => setMobilityActivity(key as MobilityActivity)} className={`rounded-2xl px-3 py-3 text-xs font-black ${mobilityActivity === key ? 'bg-white text-black' : 'bg-white/10 text-white'}`}>{label}</button>)}</div>
+              <div className="mt-4 grid grid-cols-4 gap-2">{[5,8,12,15].map((minute) => <button key={minute} onClick={() => setMobilityMinutes(minute)} className={`rounded-2xl px-2 py-3 text-xs font-black ${mobilityMinutes === minute ? 'bg-orange-500 text-black' : 'bg-white/10 text-white'}`}>{minute}m</button>)}</div>
             </Panel>
 
-            <Panel title="Routine priority" eyebrow="Actually adapting">
-              <p className="text-sm text-zinc-300">Current priority: <span className="font-black text-orange-300">{weakestAreas.join(' + ')}</span>. Mode: <span className="font-black text-orange-300">{mobilityMode}</span>. Activity: <span className="font-black text-orange-300">{mobilityActivity}</span>.</p>
-            </Panel>
+            <Panel title="Routine priority" eyebrow="Actually adapting"><p className="text-sm text-zinc-300">Current priority: <span className="font-black text-orange-300">{weakestAreas.join(' + ')}</span>. Mode: <span className="font-black text-orange-300">{mobilityMode}</span>. Activity: <span className="font-black text-orange-300">{mobilityActivity}</span>.</p></Panel>
 
-            {source === 'forgefit' && mobilityTests.map((test) => (
-              <article key={test.id} className="rounded-[2rem] border border-white/10 bg-white/5 p-5">
-                <div className="flex items-start justify-between gap-3"><div><p className="text-xs font-bold uppercase tracking-[0.18em] text-orange-300">{test.area}</p><h2 className="mt-1 text-xl font-black">{test.title}</h2><p className="mt-1 text-sm text-zinc-300">{test.instruction}</p></div><span className="rounded-full bg-orange-500 px-3 py-1 text-sm font-black text-black">{scores[test.id]}</span></div>
-                <div className="mt-3 rounded-2xl bg-black/25 p-3 text-sm text-zinc-300"><p><span className="font-black text-orange-300">Cue:</span> {test.cue}</p><p className="mt-1"><span className="font-black text-orange-300">Improve it:</span> {test.fix}</p></div>
-                <div className="mt-4 grid grid-cols-2 gap-2"><PoseArt pose={test.pose} value={0} label={test.start} small /><PoseArt pose={test.pose} value={100} label={test.end} small /></div>
-                <div className="mt-4 rounded-2xl border border-orange-500/30 bg-black/30 p-3"><PoseArt pose={test.pose} value={scores[test.id]} label="Your range" /><input className="mt-4 w-full" type="range" min="0" max="100" value={scores[test.id]} onChange={(event) => setScores({ ...scores, [test.id]: Number(event.target.value) })} /><div className="mt-1 flex justify-between text-[10px] text-zinc-500"><span>{test.start}</span><span>{test.end}</span></div></div>
-              </article>
-            ))}
+            {source === 'forgefit' && mobilityTests.map((test) => <article key={test.id} className="rounded-[2rem] border border-white/10 bg-white/5 p-5"><div className="flex items-start justify-between gap-3"><div><p className="text-xs font-bold uppercase tracking-[0.18em] text-orange-300">{test.area}</p><h2 className="mt-1 text-xl font-black">{test.title}</h2><p className="mt-1 text-sm text-zinc-300">{test.instruction}</p></div><span className="rounded-full bg-orange-500 px-3 py-1 text-sm font-black text-black">{scores[test.id]}</span></div><div className="mt-3 rounded-2xl bg-black/25 p-3 text-sm text-zinc-300"><p><span className="font-black text-orange-300">Cue:</span> {test.cue}</p><p className="mt-1"><span className="font-black text-orange-300">Improve it:</span> {test.fix}</p></div><div className="mt-4 grid grid-cols-2 gap-2"><PoseArt pose={test.pose} value={0} label={test.start} small /><PoseArt pose={test.pose} value={100} label={test.end} small /></div><div className="mt-4 rounded-2xl border border-orange-500/30 bg-black/30 p-3"><PoseArt pose={test.pose} value={scores[test.id]} label="Your range" /><input className="mt-4 w-full" type="range" min="0" max="100" value={scores[test.id]} onChange={(event) => setScores({ ...scores, [test.id]: Number(event.target.value) })} /><div className="mt-1 flex justify-between text-[10px] text-zinc-500"><span>{test.start}</span><span>{test.end}</span></div></div></article>)}
 
-            <Panel title={`Recommended ${mobilityMinutes} min routine`} eyebrow="Based on selected source + mode + activity">
-              <div className="flex flex-col gap-3">
-                {(recommendedDrills.length ? recommendedDrills : mobility.slice(0, 8)).map((drill, index) => <div key={drill.id} className="rounded-2xl bg-black/25 p-4"><p className="text-xs font-bold text-orange-300">Step {index + 1} · {drill.target_area} · {Math.max(1, Math.round((mobilityMinutes * 60) / Math.max(1, recommendedDrills.length || 6)))} sec</p><h3 className="font-black">{drill.name}</h3><p className="mt-1 text-sm text-zinc-400">{drill.instructions?.[0] ?? 'Move slowly, breathe, and stay out of sharp pain.'}</p></div>)}
-              </div>
+            <Panel title={`Recommended ${mobilityMinutes} min routine`} eyebrow="Rerollable routine">
+              <button onClick={() => setRoutineShuffle((value) => value + 1)} className="mb-3 w-full rounded-2xl bg-orange-500 px-4 py-3 text-sm font-black text-black">Shuffle routine</button>
+              <div className="flex flex-col gap-3">{(recommendedDrills.length ? recommendedDrills : mobility.slice(0, 8)).map((drill, index) => <div key={`${drill.id}-${routineShuffle}`} className="rounded-2xl bg-black/25 p-4"><p className="text-xs font-bold text-orange-300">Step {index + 1} · {drill.target_area} · {Math.max(1, Math.round((mobilityMinutes * 60) / Math.max(1, recommendedDrills.length || 6)))} sec</p><h3 className="font-black">{drill.name}</h3><p className="mt-1 text-sm text-zinc-400">{drill.instructions?.[0] ?? 'Move slowly, breathe, and stay out of sharp pain.'}</p></div>)}</div>
             </Panel>
           </section>
         )}
@@ -411,73 +415,33 @@ export default function HomePage() {
   );
 }
 
-function buildMobilityRoutine(areaScores: { area: Area; score: number }[], drills: DbMobility[], activity: MobilityActivity, mode: MobilityMode, minutes: number) {
+function getWorkoutCategoryPlan(split: SplitKey, goal: string, count: number) {
+  const goalText = goal.toLowerCase();
+  let plan = split === 'mma' ? ['power', 'strength', 'conditioning', 'core', 'hypertrophy', 'any'] : split === 'push' || split === 'pull' || split === 'legs' || split === 'lower' ? ['strength', 'hypertrophy', 'hypertrophy', 'core', 'conditioning', 'any'] : ['strength', 'hypertrophy', 'core', 'conditioning', 'power', 'any'];
+  if (goalText.includes('conditioning') || goalText.includes('lose')) plan = ['conditioning', 'strength', 'core', 'hypertrophy', 'conditioning', 'any'];
+  if (goalText.includes('strength')) plan = ['strength', 'strength', 'hypertrophy', 'core', 'conditioning', 'any'];
+  return plan.slice(0, count);
+}
+
+function seededNoise(text: string) { let hash = 0; for (let i = 0; i < text.length; i++) hash = (hash * 31 + text.charCodeAt(i)) % 9973; return (hash % 100) / 100; }
+
+function buildMobilityRoutine(areaScores: { area: Area; score: number }[], drills: DbMobility[], activity: MobilityActivity, mode: MobilityMode, minutes: number, shuffle: number) {
   const boosts = activityAreaBoosts[activity];
-  const scoredAreas = areaScores
-    .map((item) => ({ ...item, priority: (100 - item.score) + (boosts.includes(item.area) ? 20 : 0) + (mode === 'recovery' && item.score < 70 ? 12 : 0) }))
-    .sort((a, b) => b.priority - a.priority);
+  const scoredAreas = areaScores.map((item) => ({ ...item, priority: (100 - item.score) + (boosts.includes(item.area) ? 20 : 0) + (mode === 'recovery' && item.score < 70 ? 12 : 0) })).sort((a, b) => b.priority - a.priority);
   const weakestAreas = scoredAreas.slice(0, mode === 'daily' ? 3 : 2).map((item) => item.area);
   const targets = weakestAreas.map((area) => targetByArea[area]);
   const count = minutes <= 5 ? 4 : minutes <= 8 ? 5 : minutes <= 12 ? 6 : 8;
-  const ranked = drills
-    .map((drill) => {
-      let score = 0;
-      targets.forEach((target, index) => {
-        if (drill.target_area === target || drill.name.toLowerCase().includes(target)) score += 40 - index * 8;
-        if (target === 'hamstrings' && (drill.name.toLowerCase().includes('calf') || drill.name.toLowerCase().includes('hamstring') || drill.name.toLowerCase().includes('fold'))) score += 25;
-      });
-      if (mode === 'pre' && drill.duration_seconds <= 90) score += 8;
-      if (mode === 'post' && drill.duration_seconds >= 60) score += 8;
-      if (mode === 'recovery') score += 6;
-      return { drill, score };
-    })
-    .filter((item) => item.score > 0)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, count)
-    .map((item) => item.drill);
+  const ranked = drills.map((drill) => { let score = seededNoise(`${drill.id}-${shuffle}`) * 18; targets.forEach((target, index) => { if (drill.target_area === target || drill.name.toLowerCase().includes(target)) score += 40 - index * 8; if (target === 'hamstrings' && (drill.name.toLowerCase().includes('calf') || drill.name.toLowerCase().includes('hamstring') || drill.name.toLowerCase().includes('fold'))) score += 25; }); if (mode === 'pre' && drill.duration_seconds <= 90) score += 8; if (mode === 'post' && drill.duration_seconds >= 60) score += 8; if (mode === 'recovery') score += 6; return { drill, score }; }).filter((item) => item.score > 0).sort((a, b) => b.score - a.score).slice(0, count).map((item) => item.drill);
   return { weakestAreas, drills: ranked };
 }
 
-function getForgefitAreaScores(scores: Record<string, number>) {
-  const areas = Array.from(new Set(mobilityTests.map((test) => test.area))) as Area[];
-  return areas.map((area) => {
-    const tests = mobilityTests.filter((test) => test.area === area);
-    return { area, score: Math.round(tests.reduce((total, test) => total + (scores[test.id] ?? 60), 0) / tests.length) };
-  });
-}
-
-function getGowodAreaScores(scores: Record<Area, number>) {
-  return (Object.entries(scores) as [Area, number][]).map(([area, score]) => ({ area, score }));
-}
-
-function getAdjustedGowodGlobal(scores: Record<Area, number>) {
-  const originalAverage = Math.round(Object.values(originalGowodScores).reduce((total, score) => total + score, 0) / Object.values(originalGowodScores).length);
-  const currentAverage = Math.round(Object.values(scores).reduce((total, score) => total + score, 0) / Object.values(scores).length);
-  return Math.max(0, Math.min(100, Math.round(originalGowodGlobal + (currentAverage - originalAverage))));
-}
-
-function Panel({ eyebrow, title, children }: { eyebrow: string; title: string; children: ReactNode }) {
-  return <section className="rounded-[2rem] border border-white/10 bg-white/5 p-5"><p className="text-sm font-semibold text-orange-300">{eyebrow}</p><h2 className="mt-1 text-xl font-black">{title}</h2><div className="mt-4">{children}</div></section>;
-}
-
-function ScoreBar({ area, score, editable = false, onChange }: { area: Area; score: number; editable?: boolean; onChange?: (next: number) => void }) {
-  const color = score < 40 ? 'bg-orange-400' : 'bg-emerald-400';
-  return <div className="rounded-2xl bg-black/25 p-3 text-center"><p className="mx-auto rounded-lg bg-black/40 px-2 py-1 text-sm font-black">{score}</p><div className="mx-auto mt-2 flex h-20 w-2 items-end rounded-full bg-zinc-700"><span className={`block w-2 rounded-full ${color}`} style={{ height: `${score}%` }} /></div><p className="mt-2 text-[10px] font-bold text-zinc-300">{area}</p>{editable && <input className="mt-2 w-full" type="range" min="0" max="100" value={score} onChange={(event) => onChange?.(Number(event.target.value))} />}</div>;
-}
-
-function Chooser({ title, options, selected, onToggle }: { title: string; options: string[]; selected: string[]; onToggle: (value: string) => void }) {
-  return <div className="mt-4"><p className="text-xs font-bold uppercase tracking-[0.18em] text-zinc-400">{title}</p><div className="mt-2 flex flex-wrap gap-2">{options.map((option) => <button key={option} onClick={() => onToggle(option)} className={`rounded-full px-3 py-2 text-xs font-bold ${selected.includes(option) ? 'bg-orange-500 text-black' : 'bg-white/10 text-zinc-200'}`}>{option}</button>)}</div></div>;
-}
-
-function PoseArt({ pose, value, label, small = false }: { pose: Pose; value: number; label: string; small?: boolean }) {
-  const p = Math.max(0, Math.min(100, value));
-  const height = small ? 92 : 150;
-  const skin = '#fed7aa';
-  const head = '#fb923c';
-  const limb = '#fdba74';
-  return <div className="rounded-2xl border border-white/10 bg-black/30 p-2"><svg viewBox="0 0 260 160" className="w-full" style={{ height }} role="img" aria-label={label}><rect x="8" y="8" width="244" height="144" rx="22" fill="rgba(255,255,255,.04)" /><line x1="22" y1="132" x2="238" y2="132" stroke="rgba(255,255,255,.22)" strokeWidth="4" />{pose === 'squat' && <Squat p={p} skin={skin} head={head} limb={limb} />}{pose === 'toeTouch' && <ToeTouch p={p} skin={skin} head={head} limb={limb} />}{pose === 'ankleWall' && <AnkleWall p={p} skin={skin} head={head} limb={limb} />}{pose === 'overheadReach' && <OverheadReach p={p} skin={skin} head={head} limb={limb} />}{pose === 'wallSlide' && <OverheadReach p={p} skin={skin} head={head} limb={limb} />}{pose === 'thoracicTwist' && <Twist p={p} skin={skin} head={head} limb={limb} />}{pose === 'hip90' && <Hip90 p={p} skin={skin} head={head} limb={limb} />}{pose === 'lunge' && <Lunge p={p} skin={skin} head={head} limb={limb} />}{pose === 'legRaise' && <LegRaise p={p} skin={skin} head={head} limb={limb} />}{pose === 'seatedFold' && <ToeTouch p={p} skin={skin} head={head} limb={limb} />}</svg><div className="mt-1 flex items-center justify-between text-[10px]"><span className="text-zinc-400">{label}</span><span className="font-black text-orange-300">{Math.round(p)}%</span></div></div>;
-}
-
+function getForgefitAreaScores(scores: Record<string, number>) { const areas = Array.from(new Set(mobilityTests.map((test) => test.area))) as Area[]; return areas.map((area) => { const tests = mobilityTests.filter((test) => test.area === area); return { area, score: Math.round(tests.reduce((total, test) => total + (scores[test.id] ?? 60), 0) / tests.length) }; }); }
+function getGowodAreaScores(scores: Record<Area, number>) { return (Object.entries(scores) as [Area, number][]).map(([area, score]) => ({ area, score })); }
+function getAdjustedGowodGlobal(scores: Record<Area, number>) { const originalAverage = Math.round(Object.values(originalGowodScores).reduce((total, score) => total + score, 0) / Object.values(originalGowodScores).length); const currentAverage = Math.round(Object.values(scores).reduce((total, score) => total + score, 0) / Object.values(scores).length); return Math.max(0, Math.min(100, Math.round(originalGowodGlobal + (currentAverage - originalAverage)))); }
+function Panel({ eyebrow, title, children }: { eyebrow: string; title: string; children: ReactNode }) { return <section className="rounded-[2rem] border border-white/10 bg-white/5 p-5"><p className="text-sm font-semibold text-orange-300">{eyebrow}</p><h2 className="mt-1 text-xl font-black">{title}</h2><div className="mt-4">{children}</div></section>; }
+function ScoreBar({ area, score, editable = false, onChange }: { area: Area; score: number; editable?: boolean; onChange?: (next: number) => void }) { const color = score < 40 ? 'bg-orange-400' : 'bg-emerald-400'; return <div className="rounded-2xl bg-black/25 p-3 text-center"><p className="mx-auto rounded-lg bg-black/40 px-2 py-1 text-sm font-black">{score}</p><div className="mx-auto mt-2 flex h-20 w-2 items-end rounded-full bg-zinc-700"><span className={`block w-2 rounded-full ${color}`} style={{ height: `${score}%` }} /></div><p className="mt-2 text-[10px] font-bold text-zinc-300">{area}</p>{editable && <input className="mt-2 w-full" type="range" min="0" max="100" value={score} onChange={(event) => onChange?.(Number(event.target.value))} />}</div>; }
+function Chooser({ title, options, selected, onToggle }: { title: string; options: string[]; selected: string[]; onToggle: (value: string) => void }) { return <div className="mt-4"><p className="text-xs font-bold uppercase tracking-[0.18em] text-zinc-400">{title}</p><div className="mt-2 flex flex-wrap gap-2">{options.map((option) => <button key={option} onClick={() => onToggle(option)} className={`rounded-full px-3 py-2 text-xs font-bold ${selected.includes(option) ? 'bg-orange-500 text-black' : 'bg-white/10 text-zinc-200'}`}>{option}</button>)}</div></div>; }
+function PoseArt({ pose, value, label, small = false }: { pose: Pose; value: number; label: string; small?: boolean }) { const p = Math.max(0, Math.min(100, value)); const height = small ? 92 : 150; const skin = '#fed7aa'; const head = '#fb923c'; const limb = '#fdba74'; return <div className="rounded-2xl border border-white/10 bg-black/30 p-2"><svg viewBox="0 0 260 160" className="w-full" style={{ height }} role="img" aria-label={label}><rect x="8" y="8" width="244" height="144" rx="22" fill="rgba(255,255,255,.04)" /><line x1="22" y1="132" x2="238" y2="132" stroke="rgba(255,255,255,.22)" strokeWidth="4" />{pose === 'squat' && <Squat p={p} skin={skin} head={head} limb={limb} />}{pose === 'toeTouch' && <ToeTouch p={p} skin={skin} head={head} limb={limb} />}{pose === 'ankleWall' && <AnkleWall p={p} skin={skin} head={head} limb={limb} />}{pose === 'overheadReach' && <OverheadReach p={p} skin={skin} head={head} limb={limb} />}{pose === 'wallSlide' && <OverheadReach p={p} skin={skin} head={head} limb={limb} />}{pose === 'thoracicTwist' && <Twist p={p} skin={skin} head={head} limb={limb} />}{pose === 'hip90' && <Hip90 p={p} skin={skin} head={head} limb={limb} />}{pose === 'lunge' && <Lunge p={p} skin={skin} head={head} limb={limb} />}{pose === 'legRaise' && <LegRaise p={p} skin={skin} head={head} limb={limb} />}{pose === 'seatedFold' && <ToeTouch p={p} skin={skin} head={head} limb={limb} />}</svg><div className="mt-1 flex items-center justify-between text-[10px]"><span className="text-zinc-400">{label}</span><span className="font-black text-orange-300">{Math.round(p)}%</span></div></div>; }
 function Joint({ x, y }: { x: number; y: number }) { return <circle cx={x} cy={y} r="3.5" fill="#080a0f" stroke="#fdba74" strokeWidth="2" />; }
 function Squat({ p, skin, head, limb }: { p: number; skin: string; head: string; limb: string }) { const hipY = 62 + p * .52, headY = 32 + p * .18, lk = 92 - p * .28, rk = 168 + p * .28, ky = 104 + p * .26; return <><circle cx="130" cy={headY} r="13" fill={head} /><line x1="130" y1={headY+15} x2="130" y2={hipY} stroke={skin} strokeWidth="9" strokeLinecap="round" /><line x1="130" y1={hipY} x2={lk} y2={ky} stroke={skin} strokeWidth="9" strokeLinecap="round" /><line x1={lk} y1={ky} x2="66" y2="132" stroke={skin} strokeWidth="9" strokeLinecap="round" /><line x1="130" y1={hipY} x2={rk} y2={ky} stroke={skin} strokeWidth="9" strokeLinecap="round" /><line x1={rk} y1={ky} x2="194" y2="132" stroke={skin} strokeWidth="9" strokeLinecap="round" /><line x1="128" y1={headY+30} x2="82" y2={66+p*.45} stroke={limb} strokeWidth="8" strokeLinecap="round" /><line x1="132" y1={headY+30} x2="178" y2={66+p*.45} stroke={limb} strokeWidth="8" strokeLinecap="round" /><Joint x={lk} y={ky} /><Joint x={rk} y={ky} /></>; }
 function ToeTouch({ p, skin, head, limb }: { p: number; skin: string; head: string; limb: string }) { const sx=116+p*.68, sy=66+p*.47, hx=100+p*.54, hy=42+p*.42, handX=128+p*.8, handY=82+p*.48; return <><circle cx={hx} cy={hy} r="13" fill={head} /><line x1="86" y1="74" x2={sx} y2={sy} stroke={skin} strokeWidth="9" strokeLinecap="round" /><line x1="86" y1="74" x2="58" y2="132" stroke={skin} strokeWidth="9" strokeLinecap="round" /><line x1="86" y1="74" x2="204" y2="132" stroke={skin} strokeWidth="9" strokeLinecap="round" /><line x1={sx} y1={sy} x2={handX} y2={handY} stroke={limb} strokeWidth="8" strokeLinecap="round" /><line x1={sx} y1={sy} x2={handX+10} y2={handY+4} stroke={limb} strokeWidth="8" strokeLinecap="round" /></>; }
