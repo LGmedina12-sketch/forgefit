@@ -138,16 +138,19 @@ export default function HomePage() {
   const [mobilityActivity, setMobilityActivity] = useState<MobilityActivity>('mma');
   const [mobilityMinutes, setMobilityMinutes] = useState(8);
   const [routineShuffle, setRoutineShuffle] = useState(0);
-  const [recentMobilityIds, setRecentMobilityIds] = useState<string[]>([]);
+  const [generatedMobility, setGeneratedMobility] = useState<DbMobility[]>([]);
+  const [mobilitySessionHistory, setMobilitySessionHistory] = useState<string[][]>([]);
+  const [routineMessage, setRoutineMessage] = useState('Generate a routine. Last 3 routines are blocked from repeating when possible.');
   const [activeTab, setActiveTab] = useState<TabKey>('train');
   const [workoutMessage, setWorkoutMessage] = useState('');
 
   const forgefitAreaScores = getForgefitAreaScores(scores);
   const activeAreaScores = source === 'gowod' ? getGowodAreaScores(gowodAdjustments) : forgefitAreaScores;
   const mobilityAverage = source === 'gowod' ? getAdjustedGowodGlobal(gowodAdjustments) : Math.round(activeAreaScores.reduce((total, item) => total + item.score, 0) / activeAreaScores.length);
+  const recentMobilityIds = mobilitySessionHistory.flat();
   const routinePlan = buildMobilityRoutine(activeAreaScores, mobility, mobilityActivity, mobilityMode, mobilityMinutes, routineShuffle, selectedMobilityEquipment, recentMobilityIds);
   const weakestAreas = routinePlan.weakestAreas;
-  const recommendedDrills = routinePlan.drills;
+  const recommendedDrills = generatedMobility.length ? generatedMobility : routinePlan.drills;
 
   useEffect(() => {
     async function loadData() {
@@ -164,7 +167,9 @@ export default function HomePage() {
 
       setExercises((exerciseRows as DbExercise[]) ?? []);
       setMobility((mobilityRows as DbMobility[]) ?? []);
-      if (currentUser) await loadSavedWorkouts();
+      if (currentUser) {
+        await Promise.all([loadSavedWorkouts(), loadRecentMobilityHistory()]);
+      }
     }
     loadData();
   }, [supabase]);
@@ -172,6 +177,21 @@ export default function HomePage() {
   async function loadSavedWorkouts() {
     const { data } = await supabase.from('workouts').select('id, title, goal, duration_minutes, recovery_score, status, created_at').order('created_at', { ascending: false }).limit(8);
     setSavedWorkouts((data as SavedWorkout[]) ?? []);
+  }
+
+  async function loadRecentMobilityHistory() {
+    const { data } = await supabase
+      .from('mobility_sessions')
+      .select('id, mobility_session_drills(mobility_drill_id, position)')
+      .order('created_at', { ascending: false })
+      .limit(3);
+
+    const rows = (data ?? []) as { mobility_session_drills?: { mobility_drill_id: string; position: number }[] }[];
+    const history = rows
+      .map((session) => (session.mobility_session_drills ?? []).sort((a, b) => a.position - b.position).map((item) => item.mobility_drill_id))
+      .filter((session) => session.length > 0)
+      .slice(0, 3);
+    setMobilitySessionHistory(history);
   }
 
   async function signUp() {
@@ -190,7 +210,7 @@ export default function HomePage() {
     setUserId(data.user.id);
     setUserEmail(data.user.email ?? null);
     setAuthMessage(`Welcome back, ${data.user.email}`);
-    await loadSavedWorkouts();
+    await Promise.all([loadSavedWorkouts(), loadRecentMobilityHistory()]);
   }
 
   async function signOut() {
@@ -199,6 +219,8 @@ export default function HomePage() {
     setUserEmail(null);
     setGenerated([]);
     setSavedWorkouts([]);
+    setGeneratedMobility([]);
+    setMobilitySessionHistory([]);
     setAuthMessage('Signed out.');
   }
 
@@ -271,9 +293,47 @@ export default function HomePage() {
     setWorkoutMessage(nextWorkout.length ? `Workout reroll #${reroll}. Press generate again if you do not like it.` : 'No exercises matched your equipment. Add more equipment or change your goal.');
   }
 
-  function shuffleMobilityRoutine() {
-    setRecentMobilityIds((previous) => [...recommendedDrills.map((drill) => drill.id), ...previous].slice(0, 14));
-    setRoutineShuffle((value) => value + 1);
+  function generateMobilityRoutine() {
+    const nextShuffle = routineShuffle + 1;
+    const nextPlan = buildMobilityRoutine(activeAreaScores, mobility, mobilityActivity, mobilityMode, mobilityMinutes, nextShuffle, selectedMobilityEquipment, mobilitySessionHistory.flat());
+    setRoutineShuffle(nextShuffle);
+    setGeneratedMobility(nextPlan.drills);
+    setMobilitySessionHistory((previous) => [nextPlan.drills.map((drill) => drill.id), ...previous].slice(0, 3));
+    setRoutineMessage(nextPlan.drills.length ? `Generated routine #${nextShuffle}. These drills are now blocked for the next 3 generated routines when enough alternatives exist.` : 'No matching mobility drills. Add equipment or change activity.');
+  }
+
+  async function completeMobilitySession() {
+    if (!userId) return setRoutineMessage('Sign in before saving mobility sessions.');
+    if (!recommendedDrills.length) return setRoutineMessage('Generate a routine first.');
+
+    const secondsEach = Math.max(1, Math.round((mobilityMinutes * 60) / recommendedDrills.length));
+    const { data: sessionRow, error: sessionError } = await supabase
+      .from('mobility_sessions')
+      .insert({
+        user_id: userId,
+        title: `${mobilityMode} ${mobilityActivity} mobility`,
+        target_areas: weakestAreas,
+        duration_minutes: mobilityMinutes,
+        completed_at: new Date().toISOString(),
+      })
+      .select('id')
+      .single();
+
+    if (sessionError || !sessionRow) return setRoutineMessage(sessionError?.message ?? 'Could not save mobility session.');
+
+    const drillRows = recommendedDrills.map((drill, index) => ({
+      mobility_session_id: sessionRow.id,
+      mobility_drill_id: drill.id,
+      position: index + 1,
+      target_seconds: secondsEach,
+      completed: true,
+    }));
+
+    const { error: drillError } = await supabase.from('mobility_session_drills').insert(drillRows);
+    if (drillError) return setRoutineMessage(drillError.message);
+
+    setMobilitySessionHistory((previous) => [recommendedDrills.map((drill) => drill.id), ...previous].slice(0, 3));
+    setRoutineMessage('Mobility session saved. These drills will stay blocked for the next 3 routines when possible.');
   }
 
   async function saveWorkout() {
@@ -318,7 +378,7 @@ export default function HomePage() {
             <div>
               <p className="text-sm text-orange-200/80">Welcome, {userEmail}</p>
               <h1 className="mt-1 text-3xl font-black tracking-tight">Today&apos;s plan</h1>
-              <p className="mt-2 text-sm text-zinc-300">Adaptive training, equipment-based generation, and GOWOD-style mobility.</p>
+              <p className="mt-2 text-sm text-zinc-300">Adaptive training, equipment-based generation, and mobility session tracking.</p>
             </div>
             <button onClick={signOut} className="rounded-2xl bg-white/10 px-3 py-2 text-sm font-bold">Sign out</button>
           </div>
@@ -335,7 +395,6 @@ export default function HomePage() {
               <Chooser title="Workout equipment" options={equipmentOptions} selected={selectedEquipment} onToggle={(value) => toggle(selectedEquipment, value, setSelectedEquipment)} />
               <Chooser title="Muscle focus" options={muscleOptions} selected={priorities} onToggle={(value) => toggle(priorities, value, setPriorities)} />
               <button onClick={buildWorkout} className="mt-4 w-full rounded-2xl bg-orange-500 px-4 py-4 font-black text-black">Generate new workout</button>
-              <p className="mt-2 text-xs text-zinc-400">Workout equipment is strict now. If you remove bench, band, cable, or machine, exercises needing that equipment should stop showing up.</p>
               {workoutMessage && <p className="mt-3 text-sm text-orange-200">{workoutMessage}</p>}
             </Panel>
             {!!generated.length && <Panel title="Generated workout" eyebrow={`Reroll #${workoutRerolls}`}><div className="flex flex-col gap-3">{generated.map((exercise, index) => <article key={`${exercise.id}-${workoutRerolls}`} className="rounded-2xl border border-white/10 bg-black/25 p-4"><p className="text-xs text-orange-300">#{index + 1} · {exercise.category}</p><h3 className="text-lg font-black">{exercise.name}</h3><p className="text-sm text-zinc-300">{exercise.sets} sets · {exercise.reps} reps · rest {exercise.restSeconds}s</p><p className="mt-1 text-xs text-zinc-500">Needs: {exercise.equipment_needed.join(', ') || 'bodyweight'}</p><p className="mt-2 text-sm text-zinc-400">{exercise.instructions?.[0] ?? 'Move with control.'}</p></article>)}</div><button onClick={saveWorkout} className="mt-4 w-full rounded-2xl bg-white px-4 py-4 font-black text-black">Save workout</button></Panel>}
@@ -351,21 +410,23 @@ export default function HomePage() {
               <div className="mt-4 grid grid-cols-2 gap-2"><button onClick={() => setSource('gowod')} className={`rounded-2xl px-3 py-3 text-sm font-black ${source === 'gowod' ? 'bg-orange-500 text-black' : 'bg-white/10 text-white'}`}>Use GOWOD</button><button onClick={() => setSource('forgefit')} className={`rounded-2xl px-3 py-3 text-sm font-black ${source === 'forgefit' ? 'bg-orange-500 text-black' : 'bg-white/10 text-white'}`}>Use sliders</button></div>
             </Panel>
 
-            <Panel title="Routine builder" eyebrow="Equipment-aware mobility generator">
-              <p className="text-sm text-zinc-300">Pick the mode, activity, time, and equipment you actually have. The generator now filters out stretches that need missing equipment.</p>
+            <Panel title="Routine builder" eyebrow="No-repeat mobility generator">
+              <p className="text-sm text-zinc-300">Last 3 generated/completed routines are blocked from repeating when enough alternatives exist.</p>
               <div className="mt-4 grid grid-cols-2 gap-2">{[['pre','Pre-workout'],['post','Post-workout'],['daily','Daily'],['recovery','Recovery']].map(([key,label]) => <button key={key} onClick={() => setMobilityMode(key as MobilityMode)} className={`rounded-2xl px-3 py-3 text-xs font-black ${mobilityMode === key ? 'bg-orange-500 text-black' : 'bg-white/10 text-white'}`}>{label}</button>)}</div>
               <div className="mt-4 grid grid-cols-2 gap-2">{[['lifting','Lifting'],['legs','Leg day'],['push','Push'],['pull','Pull'],['running','Running'],['mma','MMA/BJJ'],['general','General']].map(([key,label]) => <button key={key} onClick={() => setMobilityActivity(key as MobilityActivity)} className={`rounded-2xl px-3 py-3 text-xs font-black ${mobilityActivity === key ? 'bg-white text-black' : 'bg-white/10 text-white'}`}>{label}</button>)}</div>
               <div className="mt-4 grid grid-cols-4 gap-2">{[5,8,12,15].map((minute) => <button key={minute} onClick={() => setMobilityMinutes(minute)} className={`rounded-2xl px-2 py-3 text-xs font-black ${mobilityMinutes === minute ? 'bg-orange-500 text-black' : 'bg-white/10 text-white'}`}>{minute}m</button>)}</div>
               <Chooser title="Mobility equipment" options={mobilityEquipmentOptions} selected={selectedMobilityEquipment} onToggle={(value) => toggle(selectedMobilityEquipment, value, setSelectedMobilityEquipment)} />
             </Panel>
 
-            <Panel title="Routine priority" eyebrow="Actually adapting"><p className="text-sm text-zinc-300">Current priority: <span className="font-black text-orange-300">{weakestAreas.join(' + ')}</span>. Equipment: <span className="font-black text-orange-300">{selectedMobilityEquipment.join(', ')}</span>.</p></Panel>
+            <Panel title="Routine priority" eyebrow="Actually adapting"><p className="text-sm text-zinc-300">Current priority: <span className="font-black text-orange-300">{weakestAreas.join(' + ')}</span>. Blocked from last 3: <span className="font-black text-orange-300">{recentMobilityIds.length}</span> drills.</p></Panel>
 
             {source === 'forgefit' && mobilityTests.map((test) => <article key={test.id} className="rounded-[2rem] border border-white/10 bg-white/5 p-5"><div className="flex items-start justify-between gap-3"><div><p className="text-xs font-bold uppercase tracking-[0.18em] text-orange-300">{test.area}</p><h2 className="mt-1 text-xl font-black">{test.title}</h2><p className="mt-1 text-sm text-zinc-300">{test.instruction}</p></div><span className="rounded-full bg-orange-500 px-3 py-1 text-sm font-black text-black">{scores[test.id]}</span></div><p className="mt-3 rounded-2xl bg-black/25 p-3 text-sm text-zinc-300"><span className="font-black text-orange-300">Cue:</span> {test.cue}<br /><span className="font-black text-orange-300">Improve:</span> {test.fix}</p><input className="mt-4 w-full" type="range" min="0" max="100" value={scores[test.id]} onChange={(event) => setScores({ ...scores, [test.id]: Number(event.target.value) })} /></article>)}
 
-            <Panel title={`Recommended ${mobilityMinutes} min routine`} eyebrow="Rerollable equipment-aware routine">
-              <button onClick={shuffleMobilityRoutine} className="mb-3 w-full rounded-2xl bg-orange-500 px-4 py-3 text-sm font-black text-black">Shuffle routine</button>
-              <div className="flex flex-col gap-3">{(recommendedDrills.length ? recommendedDrills : mobility.filter((drill) => matchesEquipment(drill.equipment_needed, selectedMobilityEquipment)).slice(0, 8)).map((drill, index) => <div key={`${drill.id}-${routineShuffle}`} className="rounded-2xl bg-black/25 p-4"><p className="text-xs font-bold text-orange-300">Step {index + 1} · {drill.target_area} · {Math.max(1, Math.round((mobilityMinutes * 60) / Math.max(1, recommendedDrills.length || 6)))} sec</p><h3 className="font-black">{drill.name}</h3><p className="mt-1 text-xs text-zinc-500">Needs: {drill.equipment_needed.join(', ') || 'bodyweight'}</p><p className="mt-1 text-sm text-zinc-400">{drill.instructions?.[0] ?? 'Move slowly, breathe, and stay out of sharp pain.'}</p></div>)}</div>
+            <Panel title={`Recommended ${mobilityMinutes} min routine`} eyebrow="Tracked session generator">
+              <button onClick={generateMobilityRoutine} className="mb-3 w-full rounded-2xl bg-orange-500 px-4 py-3 text-sm font-black text-black">Generate mobility routine</button>
+              <div className="flex flex-col gap-3">{recommendedDrills.map((drill, index) => <div key={`${drill.id}-${routineShuffle}`} className="rounded-2xl bg-black/25 p-4"><p className="text-xs font-bold text-orange-300">Step {index + 1} · {drill.target_area} · {Math.max(1, Math.round((mobilityMinutes * 60) / Math.max(1, recommendedDrills.length)))} sec</p><h3 className="font-black">{drill.name}</h3><p className="mt-1 text-xs text-zinc-500">Needs: {drill.equipment_needed.join(', ') || 'bodyweight'}</p><p className="mt-1 text-sm text-zinc-400">{drill.instructions?.[0] ?? 'Move slowly, breathe, and stay out of sharp pain.'}</p></div>)}</div>
+              {!!recommendedDrills.length && <button onClick={completeMobilitySession} className="mt-4 w-full rounded-2xl bg-white px-4 py-3 text-sm font-black text-black">Complete and save mobility session</button>}
+              <p className="mt-3 text-sm text-orange-200">{routineMessage}</p>
             </Panel>
           </section>
         )}
@@ -405,20 +466,26 @@ function buildMobilityRoutine(areaScores: { area: Area; score: number }[], drill
   const weakestAreas = scoredAreas.slice(0, mode === 'daily' ? 3 : 2).map((item) => item.area);
   const targets = weakestAreas.map((area) => targetByArea[area]);
   const count = minutes <= 5 ? 4 : minutes <= 8 ? 5 : minutes <= 12 ? 6 : 8;
+  const blocked = new Set(recentIds);
   const available = drills.filter((drill) => matchesEquipment(drill.equipment_needed, equipment));
   const pool = available.length ? available : drills.filter((drill) => matchesEquipment(drill.equipment_needed, ['bodyweight']));
-  const ranked = pool.map((drill) => {
-    let score = seededNoise(`${drill.id}-${shuffle}`) * 22;
+  const freshPool = pool.filter((drill) => !blocked.has(drill.id));
+  const enoughFresh = freshPool.length >= count;
+  const sourcePool = enoughFresh ? freshPool : pool;
+
+  const ranked = sourcePool.map((drill) => {
+    let score = seededNoise(`${drill.id}-${shuffle}-${activity}-${mode}`) * 35;
     targets.forEach((target, index) => {
       if (drill.target_area === target || drill.name.toLowerCase().includes(target)) score += 42 - index * 8;
-      if (target === 'hamstrings' && (drill.name.toLowerCase().includes('calf') || drill.name.toLowerCase().includes('hamstring') || drill.name.toLowerCase().includes('fold'))) score += 25;
+      if (target === 'hamstrings' && (drill.name.toLowerCase().includes('calf') || drill.name.toLowerCase().includes('hamstring') || drill.name.toLowerCase().includes('fold') || drill.name.toLowerCase().includes('posterior'))) score += 22;
     });
     if (mode === 'pre' && drill.duration_seconds <= 90) score += 10;
     if (mode === 'post' && drill.duration_seconds >= 60) score += 10;
     if (mode === 'recovery') score += 8;
-    if (recentIds.includes(drill.id)) score -= 18;
+    if (!enoughFresh && blocked.has(drill.id)) score -= 80;
     return { drill, score };
   }).filter((item) => item.score > 0).sort((a, b) => b.score - a.score);
+
   return { weakestAreas, drills: ranked.slice(0, count).map((item) => item.drill) };
 }
 
