@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from 'next';
 import OwnerTab from '@/components/OwnerTab';
 import ProfileGate from '@/components/ProfileGate';
+import CoachProfileTab from '@/components/CoachProfileTab';
 import './globals.css';
 
 export const metadata: Metadata = {
@@ -21,6 +22,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body>
         <ProfileGate />
         {children}
+        <CoachProfileTab />
         <OwnerTab />
       </body>
     </html>
