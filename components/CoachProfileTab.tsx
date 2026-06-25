@@ -6,6 +6,7 @@ import { usePathname } from 'next/navigation';
 export default function CoachProfileTab() {
   const pathname = usePathname();
   const active = pathname?.startsWith('/coach');
+  if (pathname === '/') return null;
 
   return (
     <Link

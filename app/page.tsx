@@ -1,82 +1,1560 @@
 'use client';
 
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { createClient } from '@/lib/supabase/client';
+import {
+  Activity,
+  AlertTriangle,
+  CheckCircle2,
+  Dumbbell,
+  HeartPulse,
+  Home,
+  Library,
+  Play,
+  RotateCcw,
+  Settings,
+  Shield,
+  SlidersHorizontal,
+  Timer,
+  TrendingUp,
+  User,
+  Video,
+  Zap,
+  type LucideIcon,
+} from 'lucide-react';
+import { exerciseLibrary } from '@/lib/data/exercises';
+import { stretchLibrary } from '@/lib/data/mobility';
+import { calibrationTests, defaultCalibrationScores, scoringAreas } from '@/lib/training/calibration';
+import {
+  calculateMobilityScores,
+  chooseExerciseSubstitutions,
+  defaultEquipmentProfile,
+  equipmentProfileToList,
+  generateMobilityPlan,
+  generateWorkoutPlan,
+  updateScoresFromFeedback,
+} from '@/lib/training/recommendationEngine';
+import type {
+  CalibrationResult,
+  CalibrationTestKey,
+  EquipmentProfile,
+  ExerciseLibraryItem,
+  MobilityArea,
+  MobilityScore,
+  MobilitySession,
+  MobilitySessionMode,
+  MovementPattern,
+  StretchLibraryItem,
+  TrainingGoal,
+  TrainingHistoryItem,
+  UserFeedback,
+  UserProfile,
+  WorkoutExercise,
+  WorkoutSession,
+} from '@/lib/training/types';
+import { createClient, isSupabaseConfigured } from '@/lib/supabase/client';
 
-type Exercise={id:string;name:string;muscle_groups:string[];equipment_needed:string[];difficulty:string;category:string;instructions:string[]};
-type Drill={id:string;name:string;target_area:string;duration_seconds:number;difficulty:string;equipment_needed:string[];instructions:string[]};
-type GenExercise=Exercise&{sets:number;reps:string;restSeconds:number;readiness:number;pattern:string};
-type SavedWorkout={id:string;title:string;goal:string;duration_minutes:number;recovery_score:number|null;status:string;created_at:string};
-type MuscleSession={trained_muscles:string[];created_at:string};
-type SplitKey='full'|'push'|'pull'|'legs'|'upper'|'lower'|'mma';
-type ProgramKey='ppl'|'upper_lower'|'arnold'|'mma'|'custom';
-type Activity='lifting'|'legs'|'push'|'pull'|'running'|'mma'|'general';
-type Area='Shoulders'|'Overhead'|'Thorax'|'Hips'|'Postchain'|'Ankles';
-type RoutineKey='mma_pre'|'legs_pre'|'upper_pre'|'running_pre'|'post_lift'|'daily_reset'|'recovery';
-type SplitDay={label:string;split:SplitKey;muscles:string[];activity:Activity};
-type RoutineGoal={label:string;activity:Activity;mode:'pre'|'post'|'daily'|'recovery';areas:Area[];description:string};
-type RoutineStep={phase:'Prep'|'Main restriction'|'Support'|'Reset';seconds:number;drill:Drill;why:string};
+type TabKey = 'home' | 'workout' | 'mobility' | 'calibration' | 'exercises' | 'stretches' | 'progress' | 'settings';
+type FeedbackDraft = {
+  rpe: number;
+  pain: boolean;
+  painAreas: MobilityArea[];
+  formQuality: UserFeedback['formQuality'];
+  completed: boolean;
+};
 
-const tabs=['train','mobility','library','history'] as const;
-const goals=['MMA performance','Build muscle','Gain strength','Lose fat','Athletic performance','Improve conditioning'];
-const equipment=['bodyweight','dumbbell','machine','cable','smith machine','resistance band','bench','bar','box','medicine ball','barbell','kettlebell','rings'];
-const mobilityEquipment=['bodyweight','wall','bench','resistance band','foam roller','dumbbell','box'];
-const muscles=['back','legs','arms','core','shoulders','chest','glutes','hamstrings','quads','calves'];
-const gowodBase:Record<Area,number>={Shoulders:91,Overhead:88,Thorax:99,Hips:98,Postchain:22,Ankles:100};
-const areaTarget:Record<Area,string>={Shoulders:'shoulders',Overhead:'shoulders',Thorax:'thoracic spine',Hips:'hips',Postchain:'hamstrings',Ankles:'ankles'};
-const activityBoost:Record<Activity,Area[]>={lifting:['Hips','Thorax','Shoulders','Postchain'],legs:['Postchain','Hips','Ankles'],push:['Shoulders','Overhead','Thorax'],pull:['Thorax','Shoulders','Postchain'],running:['Ankles','Postchain','Hips'],mma:['Hips','Thorax','Shoulders','Postchain','Ankles'],general:['Postchain','Hips','Shoulders']};
-const routineGoals:Record<RoutineKey,RoutineGoal>={mma_pre:{label:'MMA / BJJ warm-up',activity:'mma',mode:'pre',areas:['Hips','Thorax','Shoulders','Postchain'],description:'Dynamic hips, spine, shoulders, and posterior chain before training.'},legs_pre:{label:'Leg day warm-up',activity:'legs',mode:'pre',areas:['Postchain','Hips','Ankles'],description:'Hamstrings, hips, ankles, then squat/hinge-ready flow.'},upper_pre:{label:'Upper warm-up',activity:'lifting',mode:'pre',areas:['Shoulders','Overhead','Thorax'],description:'Shoulders, overhead range, thoracic rotation, and upper-back prep.'},running_pre:{label:'Run warm-up',activity:'running',mode:'pre',areas:['Ankles','Postchain','Hips'],description:'Ankles, calves, hamstrings, and hips before running.'},post_lift:{label:'Post-workout reset',activity:'general',mode:'post',areas:['Postchain','Hips','Thorax'],description:'Slower holds and breathing after lifting.'},daily_reset:{label:'Daily mobility',activity:'general',mode:'daily',areas:['Postchain','Hips','Shoulders','Thorax'],description:'Balanced daily work with your weakest area first.'},recovery:{label:'Recovery / soreness',activity:'general',mode:'recovery',areas:['Postchain','Hips','Thorax'],description:'Low-intensity reset when you feel beat up.'}};
-const programLabels:Record<ProgramKey,string>={ppl:'Push / Pull / Legs',upper_lower:'Upper / Lower',arnold:'Arnold-ish',mma:'MMA hybrid',custom:'My custom split'};
-const defaultCustom:SplitDay[]=[{label:'Custom 1',split:'full',muscles:['back','legs','core'],activity:'lifting'},{label:'Custom 2',split:'push',muscles:['chest','shoulders','arms','core'],activity:'push'},{label:'Custom 3',split:'pull',muscles:['back','arms','shoulders','core'],activity:'pull'}];
-const programs:Record<Exclude<ProgramKey,'custom'>,SplitDay[]>={ppl:[{label:'Push',split:'push',muscles:['chest','shoulders','arms','core'],activity:'push'},{label:'Pull',split:'pull',muscles:['back','arms','shoulders','core'],activity:'pull'},{label:'Legs',split:'legs',muscles:['legs','glutes','hamstrings','quads','calves','core'],activity:'legs'}],upper_lower:[{label:'Upper',split:'upper',muscles:['back','chest','shoulders','arms','core'],activity:'lifting'},{label:'Lower',split:'lower',muscles:['legs','glutes','hamstrings','quads','calves','core'],activity:'legs'}],arnold:[{label:'Chest + Back',split:'upper',muscles:['chest','back','core'],activity:'lifting'},{label:'Shoulders + Arms',split:'push',muscles:['shoulders','arms','core'],activity:'push'},{label:'Legs',split:'legs',muscles:['legs','glutes','hamstrings','quads','calves'],activity:'legs'}],mma:[{label:'MMA strength',split:'mma',muscles:['back','legs','core','shoulders'],activity:'mma'},{label:'Upper power',split:'upper',muscles:['back','chest','shoulders','arms','core'],activity:'mma'},{label:'Explosive lower',split:'legs',muscles:['legs','glutes','hamstrings','quads','calves','core'],activity:'legs'}]};
+const storageKeys = {
+  profile: 'forgefit-v2-profile',
+  equipment: 'forgefit-v2-equipment',
+  calibration: 'forgefit-v2-calibration',
+  mobilityScores: 'forgefit-v2-mobility-scores',
+  history: 'forgefit-v2-history',
+  feedback: 'forgefit-v2-feedback',
+};
 
-export default function Page(){
- const supabase=useMemo(()=>createClient(),[]);
- const [userId,setUserId]=useState<string|null>(null),[userEmail,setUserEmail]=useState<string|null>(null),[email,setEmail]=useState(''),[password,setPassword]=useState(''),[authMessage,setAuthMessage]=useState('Sign in to train.'),[activeTab,setActiveTab]=useState<(typeof tabs)[number]>('train');
- const [exercises,setExercises]=useState<Exercise[]>([]),[drills,setDrills]=useState<Drill[]>([]),[saved,setSaved]=useState<SavedWorkout[]>([]),[muscleSessions,setMuscleSessions]=useState<MuscleSession[]>([]);
- const [goal,setGoal]=useState('MMA performance'),[duration,setDuration]=useState(45),[recovery,setRecovery]=useState(75),[program,setProgram]=useState<ProgramKey>('ppl'),[dayIndex,setDayIndex]=useState(0),[customDays,setCustomDays]=useState<SplitDay[]>(defaultCustom),[split,setSplit]=useState<SplitKey>('push'),[focus,setFocus]=useState<string[]>(['chest','shoulders','arms','core']),[workoutEquipment,setWorkoutEquipment]=useState<string[]>(['bodyweight','dumbbell','machine','cable','smith machine']);
- const [generated,setGenerated]=useState<GenExercise[]>([]),[recentExerciseIds,setRecentExerciseIds]=useState<string[]>([]),[workoutRerolls,setWorkoutRerolls]=useState(0),[workoutMessage,setWorkoutMessage]=useState('');
- const [gowod,setGowod]=useState<Record<Area,number>>(gowodBase),[routineKey,setRoutineKey]=useState<RoutineKey>('mma_pre'),[mobilityMinutes,setMobilityMinutes]=useState(8),[mobEquipment,setMobEquipment]=useState<string[]>(['bodyweight','wall','bench']),[generatedMobility,setGeneratedMobility]=useState<RoutineStep[]>([]),[mobilityHistory,setMobilityHistory]=useState<string[][]>([]),[mobilityReroll,setMobilityReroll]=useState(0),[routineMessage,setRoutineMessage]=useState('Pick one routine type, then generate.');
- const days=program==='custom'?customDays:programs[program],safeDayIndex=Math.min(dayIndex,Math.max(days.length-1,0));
- const muscleRecovery=getMuscleRecovery(muscleSessions),recoveryMap=Object.fromEntries(muscleRecovery.map(x=>[x.muscle,x])),tiredFocus=expandMuscles(focus).filter(m=>(recoveryMap[m]?.readiness??100)<80);
- const areaScores=Object.entries(gowod).map(([area,score])=>({area:area as Area,score})),routineGoal=routineGoals[routineKey],mobilityPlan=buildMobilityRoutine(areaScores,drills,routineGoal,mobilityMinutes,mobilityReroll,mobEquipment,mobilityHistory.flat()),shownSteps=generatedMobility.length?generatedMobility:mobilityPlan.steps;
- useEffect(()=>{const c=localStorage.getItem('forgefit-custom-days'),p=localStorage.getItem('forgefit-program') as ProgramKey|null,r=localStorage.getItem('forgefit-routine-type') as RoutineKey|null;if(c){try{setCustomDays(JSON.parse(c))}catch{}}if(p&&Object.keys(programLabels).includes(p))setProgram(p);if(r&&Object.keys(routineGoals).includes(r))setRoutineKey(r)},[]);
- useEffect(()=>{localStorage.setItem('forgefit-custom-days',JSON.stringify(customDays))},[customDays]);useEffect(()=>{localStorage.setItem('forgefit-program',program)},[program]);useEffect(()=>{localStorage.setItem('forgefit-routine-type',routineKey)},[routineKey]);
- useEffect(()=>{async function load(){const {data:s}=await supabase.auth.getSession();const u=s.session?.user;setUserId(u?.id??null);setUserEmail(u?.email??null);const [{data:e,error:ee},{data:d,error:de}]=await Promise.all([supabase.from('exercises').select('*').order('name'),supabase.from('mobility_drills').select('*').order('target_area')]);if(ee)setWorkoutMessage(`Exercise load error: ${ee.message}`);if(de)setRoutineMessage(`Mobility load error: ${de.message}`);setExercises(((e as Exercise[])??[]).map(cleanExercise));setDrills((d as Drill[])??[]);if(u)await Promise.all([loadSaved(),loadMuscleHistory(),loadMobilityHistory()])}load()},[supabase]);
- async function loadSaved(){const {data,error}=await supabase.from('workouts').select('id,title,goal,duration_minutes,recovery_score,status,created_at').order('created_at',{ascending:false}).limit(8);if(error)setWorkoutMessage(`Workout history error: ${error.message}`);setSaved((data as SavedWorkout[])??[])}
- async function loadMuscleHistory(){const {data,error}=await supabase.from('workout_muscle_sessions').select('trained_muscles,created_at').order('created_at',{ascending:false}).limit(12);if(error)setWorkoutMessage(`Recovery load error: ${error.message}`);setMuscleSessions(((data as MuscleSession[])??[]).map(r=>({trained_muscles:expandMuscles(r.trained_muscles??[]),created_at:r.created_at})))}
- async function loadMobilityHistory(){const {data,error}=await supabase.from('mobility_sessions').select('id,mobility_session_drills(mobility_drill_id,position)').order('created_at',{ascending:false}).limit(3);if(error)setRoutineMessage(`Mobility history error: ${error.message}`);const rows=(data??[]) as {mobility_session_drills?:{mobility_drill_id:string;position:number}[]}[];setMobilityHistory(rows.map(s=>(s.mobility_session_drills??[]).sort((a,b)=>a.position-b.position).map(d=>d.mobility_drill_id)).filter(x=>x.length).slice(0,3))}
- async function signUp(){const {error,data}=await supabase.auth.signUp({email,password,options:{data:{display_name:email.split('@')[0]}}});if(error)return setAuthMessage(error.message);setUserId(data.session?.user.id??null);setUserEmail(data.session?.user.email??null);setAuthMessage(data.session?'Account created.':'Account created. Check your email.')}
- async function signIn(){const {error,data}=await supabase.auth.signInWithPassword({email,password});if(error)return setAuthMessage(error.message);setUserId(data.user.id);setUserEmail(data.user.email??null);setAuthMessage(`Welcome back, ${data.user.email}`);await Promise.all([loadSaved(),loadMuscleHistory(),loadMobilityHistory()])}
- async function signOut(){await supabase.auth.signOut();setUserId(null);setUserEmail(null);setGenerated([]);setGeneratedMobility([]);setSaved([]);setMuscleSessions([]);setMobilityHistory([])}
- function pickDay(day:SplitDay,i:number){setDayIndex(i);setSplit(day.split);setFocus(day.muscles);setRoutineKey(day.activity==='legs'?'legs_pre':day.activity==='push'||day.activity==='pull'?'upper_pre':day.activity==='mma'?'mma_pre':'daily_reset');setWorkoutMessage(`${day.label} selected. Split, focus, recovery logic, and mobility routine updated.`)}
- function saveCustomDay(){const next=[...customDays],i=Math.min(safeDayIndex,next.length-1);next[i]={label:next[i]?.label??`Custom ${i+1}`,split,muscles:focus,activity:routineGoal.activity};setCustomDays(next);setProgram('custom');setWorkoutMessage(`Saved current focus to ${next[i].label}. This is stored locally for now.`)}
- function toggle(list:string[],value:string,setter:(next:string[])=>void){setter(list.includes(value)?list.filter(x=>x!==value):[...list,value])}
- function generateWorkout(){const count=duration<=30?4:duration<=45?5:6,goalText=goal.toLowerCase(),splitAllowed=getAllowedMusclesForSplit(split,focus),equipmentPool=exercises.filter(ex=>matchesEquipment(ex.equipment_needed,workoutEquipment)),strictPool=equipmentPool.filter(ex=>matchesSplit(ex,split,focus)),sourcePool=strictPool.length>=Math.min(3,count)?strictPool:equipmentPool;if(!exercises.length){setWorkoutMessage('No exercises loaded from Supabase. Check env vars or table access.');setGenerated([]);return}if(!equipmentPool.length){setWorkoutMessage('No exercises match your equipment. Add equipment or choose bodyweight/dumbbell/machine/cable.');setGenerated([]);return}const scored=sourcePool.map(ex=>{const readiness=getExerciseReadiness(ex,recoveryMap),groups=expandMuscles(ex.muscle_groups),isStrict=matchesSplit(ex,split,focus);let score=isStrict?55:5;score+=Math.random()*18;score+=groups.filter(m=>splitAllowed.includes(m)).length*10;score+=groups.filter(m=>expandMuscles(focus).includes(m)).length*12;score+=movementPatternScore(ex,split,goalText);if(recentExerciseIds.includes(ex.id))score-=22;if(readiness<90)score-=(90-readiness)/2;if(readiness<55)score-=18;return{ex,score,readiness}}).filter(x=>x.score>0).sort((a,b)=>b.score-a.score);const ready=scored.filter(x=>x.readiness>=65),source=ready.length>=count?ready:scored,chosen:{ex:Exercise;readiness:number}[]=[];getWorkoutCategoryPlan(split,goal,count).forEach(cat=>{const pool=source.filter(x=>!chosen.some(p=>p.ex.id===x.ex.id)&&(x.ex.category===cat||cat==='any'||movementPattern(x.ex)===cat)),fallback=source.filter(x=>!chosen.some(p=>p.ex.id===x.ex.id)),use=(pool.length?pool:fallback).slice(0,8);if(use.length)chosen.push(use[Math.floor(Math.random()*use.length)])});while(chosen.length<count){const pool=source.filter(x=>!chosen.some(p=>p.ex.id===x.ex.id)).slice(0,12);if(!pool.length)break;chosen.push(pool[Math.floor(Math.random()*pool.length)])}const workout=chosen.map(({ex,readiness},i)=>({...ex,readiness,pattern:movementPattern(ex),sets:readiness<60||recovery<55?2:goalText.includes('muscle')?4:i===0?4:3,reps:ex.category==='power'?'3-5':ex.category==='conditioning'?'30-45 sec':goalText.includes('strength')?'4-6':'8-12',restSeconds:ex.category==='conditioning'?45:ex.category==='power'||goalText.includes('strength')?120:75}));const offSplit=workout.filter(ex=>!matchesSplit(ex,split,focus)).length,missing=getMissingEquipmentForSplit(exercises,split,focus,workoutEquipment),r=workoutRerolls+1;setGenerated(workout);setWorkoutRerolls(r);setRecentExerciseIds(old=>[...workout.map(x=>x.id),...old].slice(0,18));setWorkoutMessage(workout.length?`Workout #${r}. Priority: split first, then focus, then goal. Gate: ${splitAllowed.join(', ')}.${offSplit?` ${offSplit} fallback used. Missing useful equipment: ${missing.join(', ')||'none detected'}.`:''}${tiredFocus.length?` ${Array.from(new Set(tiredFocus)).join(', ')} still needs rest, so volume shifted.`:''}`:'No workout could be generated from the current data.')}
- async function saveWorkout(){if(!userId)return setWorkoutMessage('Sign in before saving.');if(!generated.length)return setWorkoutMessage('Generate a workout first.');const {data:row,error}=await supabase.from('workouts').insert({user_id:userId,title:`${goal} ${days[safeDayIndex]?.label??split} session`,goal,duration_minutes:duration,recovery_score:recovery,status:'planned'}).select('id').single();if(error||!row)return setWorkoutMessage(error?.message??'Workout could not be saved.');const {error:itemError}=await supabase.from('workout_exercises').insert(generated.map((ex,i)=>({workout_id:row.id,exercise_id:ex.id,position:i+1,target_sets:ex.sets,target_reps:ex.reps,rest_seconds:ex.restSeconds,notes:`${ex.pattern}: ${ex.instructions?.[0]??''}`})));if(itemError)return setWorkoutMessage(`Workout saved, but exercise rows failed: ${itemError.message}`);const trained=getWorkoutMuscles(generated),{error:muscleError}=await supabase.from('workout_muscle_sessions').insert({user_id:userId,workout_id:row.id,trained_muscles:trained,source:'saved_workout'});if(muscleError)return setWorkoutMessage(`Workout saved, but recovery log failed: ${muscleError.message}`);setMuscleSessions(old=>[{trained_muscles:trained,created_at:new Date().toISOString()},...old].slice(0,12));setWorkoutMessage('Workout saved. Recovery is now persisted to Supabase and will affect future workouts.');await loadSaved()}
- function generateMobilityRoutine(){const next=mobilityReroll+1,plan=buildMobilityRoutine(areaScores,drills,routineGoal,mobilityMinutes,next,mobEquipment,mobilityHistory.flat());setMobilityReroll(next);setGeneratedMobility(plan.steps);setMobilityHistory(old=>[plan.steps.map(s=>s.drill.id),...old].slice(0,3));setRoutineMessage(plan.steps.length?`Generated ${routineGoal.label}. Weak areas: ${plan.weakestAreas.join(', ')}. Prep → main restriction → support → reset.`:'No matching mobility drills. Add equipment or change routine type.')}
- async function completeMobilitySession(){if(!userId||!shownSteps.length)return setRoutineMessage('Generate a routine first.');const {data:row,error}=await supabase.from('mobility_sessions').insert({user_id:userId,title:routineGoal.label,target_areas:mobilityPlan.weakestAreas,duration_minutes:mobilityMinutes,completed_at:new Date().toISOString()}).select('id').single();if(error||!row)return setRoutineMessage(error?.message??'Could not save mobility.');const {error:drillError}=await supabase.from('mobility_session_drills').insert(shownSteps.map((s,i)=>({mobility_session_id:row.id,mobility_drill_id:s.drill.id,position:i+1,target_seconds:s.seconds,completed:true})));if(drillError)return setRoutineMessage(`Mobility session saved, but drill rows failed: ${drillError.message}`);setRoutineMessage('Mobility session saved to Supabase. Recent drills will be penalized next time.');await loadMobilityHistory()}
- if(!userId)return <AuthScreen email={email} password={password} authMessage={authMessage} setEmail={setEmail} setPassword={setPassword} signIn={signIn} signUp={signUp}/>;
- return <main className="min-h-screen bg-[#080a0f] px-4 py-5 text-white"><section className="mx-auto flex max-w-md flex-col gap-5 pb-28"><header className="rounded-[2rem] border border-white/10 bg-gradient-to-br from-orange-500/20 to-white/5 p-5"><div className="flex items-start justify-between gap-4"><div><p className="text-sm text-orange-200/80">Welcome, {userEmail}</p><h1 className="mt-1 text-3xl font-black">ForgeFit</h1><p className="mt-2 text-sm text-zinc-300">Generator logic prioritizes your actual choices. Some settings are still local until the next persistence pass.</p></div><button onClick={signOut} className="rounded-2xl bg-white/10 px-3 py-2 text-sm font-bold">Sign out</button></div><div className="mt-4 grid grid-cols-4 gap-2">{tabs.map(t=><button key={t} onClick={()=>setActiveTab(t)} className={`rounded-2xl px-3 py-3 text-xs font-black ${activeTab===t?'bg-white text-black':'bg-white/10 text-zinc-200'}`}>{t}</button>)}</div></header>{activeTab==='train'&&<section className="flex flex-col gap-5"><Panel eyebrow="Set it once" title="Split program"><div className="grid grid-cols-2 gap-2">{(Object.keys(programLabels) as ProgramKey[]).map(key=><button key={key} onClick={()=>{setProgram(key);setDayIndex(0);pickDay((key==='custom'?customDays:programs[key])[0],0)}} className={`rounded-2xl px-3 py-3 text-xs font-black ${program===key?'bg-orange-500 text-black':'bg-white/10 text-white'}`}>{programLabels[key]}</button>)}</div><div className="mt-4 grid grid-cols-2 gap-2">{days.map((d,i)=><button key={`${d.label}-${i}`} onClick={()=>pickDay(d,i)} className={`rounded-2xl px-3 py-3 text-xs font-black ${safeDayIndex===i?'bg-white text-black':'bg-white/10 text-white'}`}>{d.label}</button>)}</div><p className="mt-3 text-xs text-zinc-400">Focus: <span className="font-black text-orange-300">{focus.join(', ')}</span></p><button onClick={saveCustomDay} className="mt-3 w-full rounded-2xl bg-white/10 px-4 py-3 text-sm font-black">Save current focus to custom day</button></Panel><Panel eyebrow="Recovery" title="Muscle recovery"><div className="grid grid-cols-2 gap-2">{muscleRecovery.map(m=><div key={m.muscle} className={`rounded-2xl p-3 ${m.status==='Rest'?'bg-red-500/15':m.status==='Light'?'bg-yellow-500/15':'bg-emerald-500/15'}`}><p className="text-xs font-black uppercase text-zinc-300">{m.muscle}</p><p className="mt-1 text-lg font-black">{m.lastTrainedAt?`${m.readiness}%`:'fresh'}</p><p className="text-xs text-zinc-400">{m.status}{m.hoursSince!==null?` · ${m.hoursSince}h ago`:''}</p></div>)}</div></Panel><Panel eyebrow="Generator" title="Build workout"><select value={goal} onChange={e=>setGoal(e.target.value)} className="w-full rounded-2xl border border-white/10 bg-black/40 px-4 py-3">{goals.map(g=><option key={g}>{g}</option>)}</select><div className="mt-4 grid grid-cols-2 gap-3"><label className="rounded-2xl bg-black/30 p-3"><span className="text-xs text-zinc-400">Minutes</span><input type="number" value={duration} onChange={e=>setDuration(Number(e.target.value))} className="mt-1 w-full bg-transparent text-2xl font-black outline-none"/></label><label className="rounded-2xl bg-black/30 p-3"><span className="text-xs text-zinc-400">Recovery</span><input type="number" value={recovery} onChange={e=>setRecovery(Number(e.target.value))} className="mt-1 w-full bg-transparent text-2xl font-black outline-none"/></label></div><Chooser title="Workout equipment" options={equipment} selected={workoutEquipment} onToggle={v=>toggle(workoutEquipment,v,setWorkoutEquipment)}/><Chooser title="Specific muscle focus" options={muscles} selected={focus} onToggle={v=>toggle(focus,v,setFocus)}/><button onClick={generateWorkout} className="mt-4 w-full rounded-2xl bg-orange-500 px-4 py-4 font-black text-black">Generate new workout</button><p className="mt-3 text-sm text-orange-200">{workoutMessage||`${exercises.length} exercises loaded from Supabase.`}</p></Panel>{!!generated.length&&<Panel eyebrow={`Reroll #${workoutRerolls}`} title="Generated workout"><div className="flex flex-col gap-3">{generated.map((ex,i)=><article key={`${ex.id}-${workoutRerolls}`} className="rounded-2xl border border-white/10 bg-black/25 p-4"><p className="text-xs text-orange-300">#{i+1} · {ex.category} · {ex.pattern} · ready {Math.round(ex.readiness)}%</p><h3 className="text-lg font-black">{ex.name}</h3><p className="text-sm text-zinc-300">{ex.sets} sets · {ex.reps} · rest {ex.restSeconds}s</p><p className="mt-1 text-xs text-zinc-500">Muscles: {ex.muscle_groups.join(', ')} · Needs: {ex.equipment_needed.join(', ')||'bodyweight'}</p></article>)}</div><button onClick={saveWorkout} className="mt-4 w-full rounded-2xl bg-white px-4 py-4 font-black text-black">Save workout / log recovery</button></Panel>}</section>}{activeTab==='mobility'&&<section className="flex flex-col gap-5"><Panel eyebrow="GOWOD-style" title="Mobility score"><div className="flex items-center justify-center py-3"><div className="flex h-36 w-36 items-center justify-center rounded-full border-[10px] border-emerald-400 text-center"><div><p className="text-5xl font-black">{getGowodGlobal(gowod)}</p><p className="text-sm text-zinc-300">global</p></div></div></div><div className="grid grid-cols-3 gap-2">{areaScores.map(x=><ScoreBar key={x.area} area={x.area} score={x.score} editable onChange={n=>setGowod(old=>({...old,[x.area]:n}))}/>)}</div></Panel><Panel eyebrow="One main option" title="Routine type"><div className="grid grid-cols-1 gap-2">{(Object.keys(routineGoals) as RoutineKey[]).map(key=><button key={key} onClick={()=>{setRoutineKey(key);setGeneratedMobility([])}} className={`rounded-2xl px-3 py-3 text-left text-xs font-black ${routineKey===key?'bg-orange-500 text-black':'bg-white/10 text-white'}`}><span className="block text-sm">{routineGoals[key].label}</span><span className="block text-[10px] font-semibold opacity-80">{routineGoals[key].description}</span></button>)}</div><div className="mt-3 grid grid-cols-4 gap-2">{[5,8,12,15].map(n=><button key={n} onClick={()=>setMobilityMinutes(n)} className={`rounded-2xl px-2 py-3 text-xs font-black ${mobilityMinutes===n?'bg-orange-500 text-black':'bg-white/10 text-white'}`}>{n}m</button>)}</div><Chooser title="Mobility equipment" options={mobilityEquipment} selected={mobEquipment} onToggle={v=>toggle(mobEquipment,v,setMobEquipment)}/></Panel><Panel eyebrow="Adaptive sequence" title={`Recommended ${mobilityMinutes} min`}><button onClick={generateMobilityRoutine} className="mb-3 w-full rounded-2xl bg-orange-500 px-4 py-3 text-sm font-black text-black">Generate mobility routine</button><div className="flex flex-col gap-3">{shownSteps.map((s,i)=><div key={`${s.drill.id}-${mobilityReroll}`} className="rounded-2xl bg-black/25 p-4"><p className="text-xs font-bold text-orange-300">{i+1}. {s.phase} · {s.drill.target_area} · {s.seconds}s</p><h3 className="font-black">{s.drill.name}</h3><p className="text-xs text-zinc-500">Needs: {s.drill.equipment_needed.join(', ')||'bodyweight'} · {s.why}</p><p className="mt-1 text-sm text-zinc-400">{s.drill.instructions?.[0]??'Move slowly and breathe.'}</p></div>)}</div>{!!shownSteps.length&&<button onClick={completeMobilitySession} className="mt-4 w-full rounded-2xl bg-white px-4 py-3 text-sm font-black text-black">Complete and save mobility session</button>}<p className="mt-3 text-sm text-orange-200">{routineMessage}</p></Panel></section>}{activeTab==='library'&&<Panel eyebrow="Exercise library" title="Available movements"><p className="mb-3 text-sm text-zinc-400">{exercises.length} exercises and {drills.length} mobility drills loaded from Supabase.</p><div className="flex flex-col gap-2">{exercises.map(ex=><div key={ex.id} className="rounded-2xl bg-black/25 px-4 py-3"><p className="font-semibold">{ex.name}</p><p className="text-xs text-zinc-400">{ex.muscle_groups.join(' • ')} · {ex.equipment_needed.join(', ')||'bodyweight'}</p></div>)}</div></Panel>}{activeTab==='history'&&<Panel eyebrow="Saved history" title="Your saved workouts"><div className="flex flex-col gap-2">{saved.map(w=><div key={w.id} className="rounded-2xl bg-black/25 px-4 py-3"><p className="font-semibold">{w.title}</p><p className="text-xs text-zinc-400">{w.goal} · {w.duration_minutes} min · recovery {w.recovery_score??'n/a'}</p></div>)}{!saved.length&&<p className="text-sm text-zinc-400">No saved workouts yet.</p>}</div></Panel>}</section></main>}
+const tabs: { key: TabKey; label: string; Icon: LucideIcon }[] = [
+  { key: 'home', label: 'Home', Icon: Home },
+  { key: 'workout', label: 'Workout', Icon: Dumbbell },
+  { key: 'mobility', label: 'Mobility', Icon: Activity },
+  { key: 'calibration', label: 'Calibration', Icon: SlidersHorizontal },
+  { key: 'exercises', label: 'Exercises', Icon: Library },
+  { key: 'stretches', label: 'Stretches', Icon: HeartPulse },
+  { key: 'progress', label: 'Progress', Icon: TrendingUp },
+  { key: 'settings', label: 'Settings', Icon: User },
+];
 
-function AuthScreen({email,password,authMessage,setEmail,setPassword,signIn,signUp}:{email:string;password:string;authMessage:string;setEmail:(v:string)=>void;setPassword:(v:string)=>void;signIn:()=>void;signUp:()=>void}){return <main className="min-h-screen bg-[#080a0f] px-4 py-8 text-white"><section className="mx-auto max-w-md rounded-[2rem] border border-white/10 bg-white/5 p-6 shadow-2xl"><p className="text-sm font-semibold text-orange-300">ForgeFit</p><h1 className="mt-2 text-4xl font-black">Sign in to train</h1><div className="mt-6 flex flex-col gap-3"><input value={email} onChange={e=>setEmail(e.target.value)} placeholder="Email" className="rounded-2xl border border-white/10 bg-black/40 px-4 py-3 outline-none"/><input value={password} onChange={e=>setPassword(e.target.value)} placeholder="Password" type="password" className="rounded-2xl border border-white/10 bg-black/40 px-4 py-3 outline-none"/><button onClick={signIn} className="rounded-2xl bg-orange-500 px-4 py-3 font-black text-black">Sign in</button><button onClick={signUp} className="rounded-2xl border border-white/10 px-4 py-3 font-black">Create account</button><p className="text-sm text-orange-200">{authMessage}</p></div></section></main>}
-function cleanExercise(ex:Exercise):Exercise{return{...ex,muscle_groups:ex.muscle_groups??[],equipment_needed:ex.equipment_needed??['bodyweight'],instructions:ex.instructions??[]}}
-function canonicalMuscle(m:string){const x=m.toLowerCase().trim();if(['lats','upper back','rear delts','rear delt'].includes(x))return'back';if(['hip flexors'].includes(x))return'core';if(['calf','calves'].includes(x))return'calves';return x}
-function expandMuscles(list:string[]){const set=new Set<string>();list.map(canonicalMuscle).forEach(m=>{set.add(m);if(m==='legs')['quads','hamstrings','glutes','calves'].forEach(x=>set.add(x));if(m==='arms')['biceps','triceps','forearms'].forEach(x=>set.add(x));if(['biceps','triceps','forearms'].includes(m))set.add('arms');if(m==='full body')['chest','back','shoulders','arms','legs','quads','hamstrings','glutes','core'].forEach(x=>set.add(x))});return Array.from(set)}
-function matchesEquipment(required:string[]=[],selected:string[]){const req=required.map(x=>x.toLowerCase());if(!req.length||req.includes('bodyweight'))return true;return req.some(item=>selected.includes(item))}
-function getAllowedMusclesForSplit(split:SplitKey,focus:string[]){const base:Record<SplitKey,string[]>={push:['chest','shoulders','arms','triceps','core'],pull:['back','shoulders','arms','biceps','forearms','core'],legs:['legs','glutes','hamstrings','quads','calves','core'],lower:['legs','glutes','hamstrings','quads','calves','core'],upper:['back','chest','shoulders','arms','biceps','triceps','forearms','core'],full:muscles,mma:muscles};return Array.from(new Set([...base[split],...expandMuscles(focus)]))}
-function matchesSplit(ex:Exercise,split:SplitKey,focus:string[]){const groups=expandMuscles(ex.muscle_groups),allowed=getAllowedMusclesForSplit(split,focus);if(split==='full'||split==='mma')return groups.some(m=>allowed.includes(m));const hard=groups.filter(m=>!['core','forearms','biceps','triceps','arms'].includes(m));return hard.length?hard.some(m=>allowed.includes(m)):groups.some(m=>allowed.includes(m))}
-function getWorkoutMuscles(workout:GenExercise[]){return expandMuscles(Array.from(new Set(workout.flatMap(ex=>ex.muscle_groups))))}
-function getMuscleRecovery(sessions:MuscleSession[]){const now=Date.now(),cooldown:Record<string,number>={core:24,arms:36,biceps:36,triceps:36,forearms:24,chest:48,back:48,shoulders:48,legs:48,glutes:48,hamstrings:48,quads:48,calves:36};return muscles.map(muscle=>{const found=sessions.find(s=>expandMuscles(s.trained_muscles).includes(muscle));if(!found)return{muscle,readiness:100,hoursSince:null,status:'Ready' as const,lastTrainedAt:null};const hoursSince=Math.max(0,Math.floor((now-new Date(found.created_at).getTime())/36e5)),readiness=Math.min(100,Math.round((hoursSince/(cooldown[muscle]??48))*100));return{muscle,readiness,hoursSince,status:readiness>=90?'Ready' as const:readiness>=60?'Light' as const:'Rest' as const,lastTrainedAt:found.created_at}})}
-function getExerciseReadiness(ex:Exercise,rec:Record<string,{readiness:number}>){return Math.min(...expandMuscles(ex.muscle_groups).map(m=>rec[m]?.readiness??100),100)}
-function movementPattern(ex:Exercise){const n=ex.name.toLowerCase(),g=expandMuscles(ex.muscle_groups);if(/lunge|split/.test(n))return'lunge';if(/squat|leg press|extension/.test(n)&&g.some(x=>['quads','legs'].includes(x)))return'squat';if(/deadlift|hinge|rdl|thrust|leg curl/.test(n)||g.includes('hamstrings'))return'hinge';if(/row|pulldown|pull|chin/.test(n))return'pull';if(/press|push|dip|fly/.test(n))return'push';if(/jump|bound|pogo/.test(n))return'power';if(/carry|burpee|crawl/.test(n)||ex.category==='conditioning')return'conditioning';if(g.includes('core')||ex.category==='core')return'core';if(g.includes('arms'))return'arms';return ex.category||'strength'}
-function movementPatternScore(ex:Exercise,split:SplitKey,goal:string){const p=movementPattern(ex);let score=0;if((split==='legs'||split==='lower')&&['squat','hinge','lunge','power','core'].includes(p))score+=18;if(split==='push'&&['push','arms','core'].includes(p))score+=18;if(split==='pull'&&['pull','arms','conditioning','core'].includes(p))score+=18;if(split==='upper'&&['push','pull','arms','core'].includes(p))score+=14;if(goal.includes('conditioning')&&p==='conditioning')score+=12;if(goal.includes('strength')&&ex.category==='strength')score+=10;if(goal.includes('muscle')&&ex.category==='hypertrophy')score+=10;if(goal.includes('mma')&&['power','conditioning','core'].includes(p))score+=10;return score}
-function getWorkoutCategoryPlan(split:SplitKey,goal:string,count:number){const g=goal.toLowerCase();let p=split==='legs'||split==='lower'?['squat','hinge','lunge','core','conditioning','any']:split==='push'?['push','push','arms','core','conditioning','any']:split==='pull'?['pull','pull','arms','core','conditioning','any']:split==='mma'?['power','strength','conditioning','core','hypertrophy','any']:['push','pull','arms','core','conditioning','any'];if(g.includes('conditioning')||g.includes('lose'))p=['conditioning',...p];return p.slice(0,count)}
-function getMissingEquipmentForSplit(exercises:Exercise[],split:SplitKey,focus:string[],selected:string[]){const missing=new Set<string>();exercises.filter(ex=>matchesSplit(ex,split,focus)).forEach(ex=>(ex.equipment_needed??[]).forEach(eq=>{const e=eq.toLowerCase();if(e!=='bodyweight'&&!selected.includes(e))missing.add(e)}));return Array.from(missing).slice(0,4)}
-function seededNoise(text:string){let h=0;for(let i=0;i<text.length;i++)h=(h*31+text.charCodeAt(i))%9973;return(h%100)/100}
-function drillPhase(d:Drill):RoutineStep['phase']{const n=d.name.toLowerCase();if(/breathing|reset|legs up|child|rib/.test(n))return'Reset';if(/walk|march|flow|rock|switch|cars|pogo|rotation|sweep|pedal|inchworm/.test(n))return'Prep';if(d.duration_seconds>=90||/stretch|fold|couch|pigeon|prayer|distraction/.test(n))return'Main restriction';return'Support'}
-function buildMobilityRoutine(areaScores:{area:Area;score:number}[],drills:Drill[],goal:RoutineGoal,minutes:number,shuffle:number,eq:string[],recent:string[]){const boosted=[...goal.areas,...activityBoost[goal.activity]],areas=areaScores.map(x=>({...x,priority:(100-x.score)+(boosted.includes(x.area)?24:0)+(goal.mode==='recovery'&&x.score<70?10:0)})).sort((a,b)=>b.priority-a.priority),weak=areas.slice(0,goal.mode==='daily'?3:2).map(x=>x.area),targets=Array.from(new Set([...weak,...goal.areas])).map(a=>areaTarget[a]),count=minutes<=5?4:minutes<=8?5:minutes<=12?6:8,seconds=Math.max(35,Math.round((minutes*60)/count)),pool=drills.filter(d=>matchesEquipment(d.equipment_needed,eq)),fresh=pool.filter(d=>!recent.includes(d.id)),source=fresh.length>=count?fresh:pool,phasePattern:RoutineStep['phase'][]=count<=4?['Prep','Main restriction','Support','Reset']:['Prep','Prep','Main restriction','Main restriction','Support','Reset','Support','Reset'],phases=phasePattern.slice(0,count),used=new Set<string>();const steps=phases.map((phase,index)=>{const scored=source.filter(d=>!used.has(d.id)).map(d=>{let score=seededNoise(`${d.id}-${shuffle}-${phase}-${index}`)*28;const dPhase=drillPhase(d);if(dPhase===phase)score+=28;targets.forEach((t,i)=>{if(d.target_area===t||d.name.toLowerCase().includes(t))score+=40-i*7});if(goal.mode==='pre'&&dPhase==='Prep')score+=12;if(goal.mode==='post'&&['Main restriction','Reset'].includes(dPhase))score+=10;if(goal.mode==='recovery'&&d.difficulty!=='advanced')score+=10;if(recent.includes(d.id)&&fresh.length<count)score-=65;return{d,score}}).sort((a,b)=>b.score-a.score),picked=scored[0]?.d??source.find(d=>!used.has(d.id))??source[0];if(picked)used.add(picked.id);return picked?{phase,seconds,drill:picked,why:`${phase.toLowerCase()} for ${picked.target_area}`}:null}).filter(Boolean) as RoutineStep[];return{weakestAreas:weak,steps}}
-function getGowodGlobal(scores:Record<Area,number>){const oldAvg=Math.round(Object.values(gowodBase).reduce((a,b)=>a+b,0)/6),nowAvg=Math.round(Object.values(scores).reduce((a,b)=>a+b,0)/6);return Math.max(0,Math.min(100,89+(nowAvg-oldAvg)))}
-function Panel({eyebrow,title,children}:{eyebrow:string;title:string;children:ReactNode}){return <section className="rounded-[2rem] border border-white/10 bg-white/5 p-5"><p className="text-sm font-semibold text-orange-300">{eyebrow}</p><h2 className="mt-1 text-xl font-black">{title}</h2><div className="mt-4">{children}</div></section>}
-function ScoreBar({area,score,editable,onChange}:{area:Area;score:number;editable?:boolean;onChange?:(next:number)=>void}){return <div className="rounded-2xl bg-black/25 p-3 text-center"><p className="mx-auto rounded-lg bg-black/40 px-2 py-1 text-sm font-black">{score}</p><div className="mx-auto mt-2 flex h-20 w-2 items-end rounded-full bg-zinc-700"><span className={`block w-2 rounded-full ${score<40?'bg-orange-400':'bg-emerald-400'}`} style={{height:`${score}%`}}/></div><p className="mt-2 text-[10px] font-bold text-zinc-300">{area}</p>{editable&&<input className="mt-2 w-full" type="range" min="0" max="100" value={score} onChange={e=>onChange?.(Number(e.target.value))}/>}</div>}
-function Chooser({title,options,selected,onToggle}:{title:string;options:string[];selected:string[];onToggle:(value:string)=>void}){return <div className="mt-4"><p className="text-xs font-bold uppercase tracking-[0.18em] text-zinc-400">{title}</p><div className="mt-2 flex flex-wrap gap-2">{options.map(o=><button key={o} onClick={()=>onToggle(o)} className={`rounded-full px-3 py-2 text-xs font-bold ${selected.includes(o)?'bg-orange-500 text-black':'bg-white/10 text-zinc-200'}`}>{o}</button>)}</div></div>}
+const goalOptions: { label: string; value: TrainingGoal }[] = [
+  { label: 'Strength', value: 'strength' },
+  { label: 'Muscle', value: 'muscle' },
+  { label: 'Fat loss', value: 'fat_loss' },
+  { label: 'Athleticism', value: 'athleticism' },
+  { label: 'MMA/BJJ support', value: 'mma_bjj' },
+  { label: 'Mobility', value: 'mobility' },
+  { label: 'Endurance', value: 'endurance' },
+];
+
+const painOptions: MobilityArea[] = [
+  'shoulders',
+  'neck',
+  'wrists',
+  'elbows',
+  'lower_back',
+  'hips',
+  'hip_flexors',
+  'adductors',
+  'hamstrings',
+  'knees',
+  'ankles',
+];
+
+const movementFilters: ('all' | MovementPattern)[] = [
+  'all',
+  'push',
+  'pull',
+  'squat',
+  'hinge',
+  'core',
+  'carry',
+  'rotation',
+  'conditioning',
+  'power',
+  'neck',
+];
+
+const defaultEquipment = defaultEquipmentProfile();
+const defaultProfile: UserProfile = {
+  goal: 'mma_bjj',
+  equipment: equipmentProfileToList(defaultEquipment),
+  trainingDaysPerWeek: 3,
+  combatSchedule: { mma: 1, bjj: 2, wrestling: 1, striking: 0 },
+  sorenessLevel: 3,
+  readinessLevel: 76,
+  painAreas: [],
+  experienceLevel: 'intermediate',
+  workoutLength: 45,
+  mobilityMinutes: 10,
+};
+
+const defaultCalibrationResult: CalibrationResult = {
+  completedAt: new Date().toISOString(),
+  profile: defaultProfile,
+  testScores: defaultCalibrationScores,
+};
+
+const defaultMobilityScores = calculateMobilityScores(defaultCalibrationResult);
+const defaultFeedback: FeedbackDraft = { rpe: 7, pain: false, painAreas: [], formQuality: 'good', completed: true };
+
+export default function Page() {
+  const supabase = useMemo(() => createClient(), []);
+  const [activeTab, setActiveTab] = useState<TabKey>('home');
+  const [userId, setUserId] = useState<string | null>(null);
+  const [userEmail, setUserEmail] = useState<string | null>(null);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [authMessage, setAuthMessage] = useState(isSupabaseConfigured() ? 'Sign in or create an account.' : 'Supabase is not configured, demo mode is available.');
+  const [profile, setProfile] = useState<UserProfile>(defaultProfile);
+  const [equipmentProfile, setEquipmentProfile] = useState<EquipmentProfile>(defaultEquipment);
+  const [calibrationScores, setCalibrationScores] = useState<Record<CalibrationTestKey, number>>(defaultCalibrationScores);
+  const [mobilityScores, setMobilityScores] = useState<MobilityScore[]>(defaultMobilityScores);
+  const [history, setHistory] = useState<TrainingHistoryItem[]>([]);
+  const [feedback, setFeedback] = useState<UserFeedback[]>([]);
+  const [generatedWorkout, setGeneratedWorkout] = useState<WorkoutSession | null>(null);
+  const [generatedMobility, setGeneratedMobility] = useState<MobilitySession | null>(null);
+  const [mobilityMode, setMobilityMode] = useState<MobilitySessionMode>('pre_workout');
+  const [statusMessage, setStatusMessage] = useState('Complete calibration or generate from defaults.');
+  const [workoutFeedback, setWorkoutFeedback] = useState<FeedbackDraft>(defaultFeedback);
+  const [mobilityFeedback, setMobilityFeedback] = useState<FeedbackDraft>({ ...defaultFeedback, rpe: 5 });
+  const [exerciseQuery, setExerciseQuery] = useState('');
+  const [exerciseFilter, setExerciseFilter] = useState<'all' | MovementPattern>('all');
+  const [stretchQuery, setStretchQuery] = useState('');
+  const [stretchArea, setStretchArea] = useState<'all' | MobilityArea>('all');
+
+  const globalMobilityScore = Math.round(mobilityScores.reduce((sum, score) => sum + score.score, 0) / Math.max(1, mobilityScores.length));
+  const weakestScores = [...mobilityScores].sort((a, b) => a.score - b.score).slice(0, 3);
+  const recentPatterns = history.slice(0, 4).flatMap((item) => item.movementPatterns);
+  const filteredExercises = exerciseLibrary.filter((item) => {
+    const query = exerciseQuery.trim().toLowerCase();
+    const matchesQuery = !query || [item.name, item.category, item.movementPattern, ...item.musclesWorked, ...item.equipment].join(' ').toLowerCase().includes(query);
+    const matchesFilter = exerciseFilter === 'all' || item.movementPattern === exerciseFilter;
+    return matchesQuery && matchesFilter;
+  });
+  const filteredStretches = stretchLibrary.filter((item) => {
+    const query = stretchQuery.trim().toLowerCase();
+    const matchesQuery = !query || [item.name, item.category, item.phase, ...item.bodyAreas, ...item.equipment].join(' ').toLowerCase().includes(query);
+    const matchesArea = stretchArea === 'all' || item.bodyAreas.includes(stretchArea);
+    return matchesQuery && matchesArea;
+  });
+
+  useEffect(() => {
+    setProfile(readJson(storageKeys.profile, defaultProfile));
+    setEquipmentProfile(readJson(storageKeys.equipment, defaultEquipment));
+    setCalibrationScores(readJson(storageKeys.calibration, defaultCalibrationScores));
+    setMobilityScores(readJson(storageKeys.mobilityScores, defaultMobilityScores));
+    setHistory(readJson(storageKeys.history, []));
+    setFeedback(readJson(storageKeys.feedback, []));
+
+    async function loadSession() {
+      const { data } = await supabase.auth.getSession();
+      const user = data.session?.user;
+      if (!user) return;
+
+      setUserId(user.id);
+      setUserEmail(user.email ?? null);
+      setAuthMessage(`Signed in as ${user.email ?? 'ForgeFit athlete'}.`);
+
+      const { data: profileRow } = await supabase.from('profiles').select('*').eq('id', user.id).maybeSingle();
+      if (profileRow && typeof profileRow === 'object') {
+        const mappedProfile = mapProfileRow(profileRow as Record<string, unknown>, profile);
+        setProfile(mappedProfile);
+        writeJson(storageKeys.profile, mappedProfile);
+        const rowEquipment = Array.isArray((profileRow as Record<string, unknown>).equipment_profile)
+          ? ((profileRow as Record<string, unknown>).equipment_profile as string[])
+          : mappedProfile.equipment;
+        setEquipmentProfile(equipmentListToProfile(rowEquipment));
+      }
+    }
+
+    loadSession();
+  }, [supabase]);
+
+  function updateProfile(next: Partial<UserProfile>) {
+    setProfile((old) => {
+      const merged = { ...old, ...next };
+      writeJson(storageKeys.profile, merged);
+      return merged;
+    });
+  }
+
+  function toggleEquipment(key: keyof EquipmentProfile) {
+    setEquipmentProfile((old) => {
+      const next = { ...old, [key]: !old[key] };
+      const equipment = equipmentProfileToList(next);
+      writeJson(storageKeys.equipment, next);
+      updateProfile({ equipment });
+      return next;
+    });
+  }
+
+  function togglePain(area: MobilityArea, target: 'profile' | 'workoutFeedback' | 'mobilityFeedback') {
+    if (target === 'profile') {
+      updateProfile({ painAreas: toggleList(profile.painAreas, area) });
+      return;
+    }
+
+    const setter = target === 'workoutFeedback' ? setWorkoutFeedback : setMobilityFeedback;
+    setter((old) => ({ ...old, painAreas: toggleList(old.painAreas, area), pain: true }));
+  }
+
+  async function signUp() {
+    const { data, error } = await supabase.auth.signUp({ email, password, options: { data: { display_name: email.split('@')[0] } } });
+    if (error) return setAuthMessage(error.message);
+    setUserId(data.session?.user.id ?? null);
+    setUserEmail(data.session?.user.email ?? email);
+    setAuthMessage(data.session ? 'Account created.' : 'Account created. Check your email if confirmation is enabled.');
+  }
+
+  async function signIn() {
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error) return setAuthMessage(error.message);
+    setUserId(data.user?.id ?? null);
+    setUserEmail(data.user?.email ?? email);
+    setAuthMessage(`Welcome back, ${data.user?.email ?? email}.`);
+  }
+
+  async function signOut() {
+    await supabase.auth.signOut();
+    setUserId(null);
+    setUserEmail(null);
+    setGeneratedWorkout(null);
+    setGeneratedMobility(null);
+    setAuthMessage('Signed out.');
+  }
+
+  function enterDemoMode() {
+    setUserId('local-demo');
+    setUserEmail('demo@forgefit.local');
+    setAuthMessage('Demo mode active. Data is saved locally in this browser.');
+  }
+
+  async function completeCalibration() {
+    const result: CalibrationResult = {
+      completedAt: new Date().toISOString(),
+      profile,
+      testScores: calibrationScores,
+    };
+    const nextScores = calculateMobilityScores(result);
+    setMobilityScores(nextScores);
+    writeJson(storageKeys.calibration, calibrationScores);
+    writeJson(storageKeys.mobilityScores, nextScores);
+    setStatusMessage('Calibration saved. Workout and mobility recommendations now use these scores.');
+    setGeneratedWorkout(generateWorkoutPlan({ profile, mobilityScores: nextScores, history, feedback }));
+    setGeneratedMobility(generateMobilityPlan({ profile, mobilityScores: nextScores, mode: mobilityMode, timeAvailable: profile.mobilityMinutes, feedback }));
+    setActiveTab('home');
+
+    if (userId && userId !== 'local-demo') {
+      await supabase.from('profiles').update({
+        primary_goal: profile.goal,
+        experience_level: profile.experienceLevel,
+        equipment_profile: profile.equipment,
+        profile_completed: true,
+      }).eq('id', userId);
+      await supabase.from('calibration_results').insert({
+        user_id: userId,
+        completed_at: result.completedAt,
+        test_scores: result.testScores,
+        profile_snapshot: result.profile,
+      });
+    }
+  }
+
+  function generateWorkout() {
+    const workout = generateWorkoutPlan({ profile, mobilityScores, history, feedback });
+    setGeneratedWorkout(workout);
+    setStatusMessage(`${workout.title} generated from calibration, readiness, equipment, and recent history.`);
+    setActiveTab('workout');
+  }
+
+  function generateMobility() {
+    const routine = generateMobilityPlan({
+      profile,
+      mobilityScores,
+      mode: mobilityMode,
+      timeAvailable: profile.mobilityMinutes,
+      feedback,
+    });
+    setGeneratedMobility(routine);
+    setStatusMessage(`${routine.title} generated from your lowest scores and sport needs.`);
+    setActiveTab('mobility');
+  }
+
+  function swapExercise(exercise: WorkoutExercise) {
+    if (!generatedWorkout) return;
+    const swaps = chooseExerciseSubstitutions(exercise.item, profile.equipment, profile.painAreas);
+    const replacement = swaps[0];
+    if (!replacement) {
+      setStatusMessage('No safer substitution matched your equipment and pain settings.');
+      return;
+    }
+
+    setGeneratedWorkout({
+      ...generatedWorkout,
+      exercises: generatedWorkout.exercises.map((entry) =>
+        entry.item.id === exercise.item.id
+          ? { ...entry, item: replacement, reason: `Swapped from ${exercise.item.name} for equipment or comfort.` }
+          : entry,
+      ),
+    });
+  }
+
+  async function logFeedback(sessionType: UserFeedback['sessionType'], draft: FeedbackDraft) {
+    const session = sessionType === 'workout' ? generatedWorkout : generatedMobility;
+    if (!session) {
+      setStatusMessage(`Generate a ${sessionType} first.`);
+      return;
+    }
+
+    const entry: UserFeedback = {
+      sessionId: session.id,
+      sessionType,
+      rpe: draft.rpe,
+      pain: draft.pain,
+      painAreas: draft.painAreas,
+      formQuality: draft.formQuality,
+      completed: draft.completed,
+      createdAt: new Date().toISOString(),
+    };
+    const nextFeedback = [entry, ...feedback].slice(0, 40);
+    const nextScores = updateScoresFromFeedback(mobilityScores, entry);
+    setFeedback(nextFeedback);
+    setMobilityScores(nextScores);
+    writeJson(storageKeys.feedback, nextFeedback);
+    writeJson(storageKeys.mobilityScores, nextScores);
+
+    if (sessionType === 'workout' && generatedWorkout) {
+      const nextHistory = [historyFromWorkout(generatedWorkout, entry), ...history].slice(0, 30);
+      setHistory(nextHistory);
+      writeJson(storageKeys.history, nextHistory);
+      await saveWorkoutToSupabase(generatedWorkout, entry);
+    } else if (generatedMobility) {
+      await saveMobilityToSupabase(generatedMobility, entry);
+    }
+
+    setStatusMessage(`${sessionType === 'workout' ? 'Workout' : 'Mobility'} feedback saved. The next recommendation will adjust from it.`);
+  }
+
+  async function saveWorkoutToSupabase(workout: WorkoutSession, entry: UserFeedback) {
+    if (!userId || userId === 'local-demo') return;
+
+    const { data: row } = await supabase.from('workouts').insert({
+      user_id: userId,
+      title: workout.title,
+      goal: profile.goal,
+      duration_minutes: workout.durationMinutes,
+      recovery_score: profile.readinessLevel,
+      status: entry.completed ? 'completed' : 'planned',
+    }).select('id').single();
+
+    const workoutId = (row as { id?: string } | null)?.id;
+    if (workoutId) {
+      await supabase.from('workout_exercises').insert(workout.exercises.map((exercise, index) => ({
+        workout_id: workoutId,
+        exercise_id: exercise.item.id,
+        position: index + 1,
+        target_sets: exercise.sets ?? null,
+        target_reps: exercise.reps ?? `${exercise.timeSeconds ?? 0}s`,
+        rest_seconds: exercise.restSeconds,
+        notes: `${exercise.phase}: ${exercise.reason}`,
+      })));
+      await supabase.from('workout_muscle_sessions').insert({
+        user_id: userId,
+        workout_id: workoutId,
+        trained_muscles: Array.from(new Set(workout.exercises.flatMap((exercise) => exercise.item.musclesWorked))),
+        source: 'forgefit_v2',
+      });
+    }
+
+    await supabase.from('user_feedback').insert({
+      user_id: userId,
+      session_id: workout.id,
+      session_type: entry.sessionType,
+      rpe: entry.rpe,
+      pain: entry.pain,
+      pain_areas: entry.painAreas,
+      form_quality: entry.formQuality,
+      completed: entry.completed,
+    });
+  }
+
+  async function saveMobilityToSupabase(routine: MobilitySession, entry: UserFeedback) {
+    if (!userId || userId === 'local-demo') return;
+
+    const { data: row } = await supabase.from('mobility_sessions').insert({
+      user_id: userId,
+      title: routine.title,
+      target_areas: routine.targetAreas,
+      duration_minutes: routine.durationMinutes,
+      completed_at: entry.completed ? entry.createdAt : null,
+    }).select('id').single();
+
+    const mobilitySessionId = (row as { id?: string } | null)?.id;
+    if (mobilitySessionId) {
+      await supabase.from('mobility_session_drills').insert(routine.steps.map((step, index) => ({
+        mobility_session_id: mobilitySessionId,
+        mobility_drill_id: step.item.id,
+        position: index + 1,
+        target_seconds: step.seconds,
+        completed: entry.completed,
+      })));
+    }
+
+    await supabase.from('user_feedback').insert({
+      user_id: userId,
+      session_id: routine.id,
+      session_type: entry.sessionType,
+      rpe: entry.rpe,
+      pain: entry.pain,
+      pain_areas: entry.painAreas,
+      form_quality: entry.formQuality,
+      completed: entry.completed,
+    });
+  }
+
+  if (!userId) {
+    return (
+      <AuthScreen
+        email={email}
+        password={password}
+        authMessage={authMessage}
+        setEmail={setEmail}
+        setPassword={setPassword}
+        signIn={signIn}
+        signUp={signUp}
+        enterDemoMode={enterDemoMode}
+      />
+    );
+  }
+
+  return (
+    <main className="min-h-screen bg-[#070807] text-zinc-50">
+      <section className="mx-auto flex min-h-screen w-full max-w-6xl flex-col px-4 pb-28 pt-4 sm:px-6 lg:px-8">
+        <header className="sticky top-0 z-30 -mx-4 border-b border-white/10 bg-[#070807]/95 px-4 pb-3 pt-3 backdrop-blur sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-xs font-black uppercase tracking-[0.18em] text-orange-300">ForgeFit</p>
+              <h1 className="mt-1 text-2xl font-black tracking-normal sm:text-3xl">Athlete dashboard</h1>
+            </div>
+            <button onClick={signOut} className="inline-flex h-11 items-center gap-2 rounded-xl border border-white/10 bg-white/10 px-3 text-sm font-bold text-zinc-100">
+              <Settings className="h-4 w-4" />
+              Sign out
+            </button>
+          </div>
+          <nav className="mt-4 flex gap-2 overflow-x-auto pb-1">
+            {tabs.map(({ key, label, Icon }) => (
+              <button
+                key={key}
+                onClick={() => setActiveTab(key)}
+                className={`inline-flex h-11 shrink-0 items-center gap-2 rounded-xl border px-3 text-sm font-black ${
+                  activeTab === key ? 'border-orange-300 bg-orange-500 text-black' : 'border-white/10 bg-white/10 text-zinc-200'
+                }`}
+              >
+                <Icon className="h-4 w-4" />
+                {label}
+              </button>
+            ))}
+          </nav>
+        </header>
+
+        <section className="mt-5 grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
+          <div className="flex flex-col gap-4">
+            {activeTab === 'home' && (
+              <HomeDashboard
+                userEmail={userEmail}
+                profile={profile}
+                mobilityScore={globalMobilityScore}
+                weakestScores={weakestScores}
+                recentPatterns={recentPatterns}
+                generatedWorkout={generatedWorkout}
+                generatedMobility={generatedMobility}
+                generateWorkout={generateWorkout}
+                generateMobility={generateMobility}
+                setActiveTab={setActiveTab}
+              />
+            )}
+
+            {activeTab === 'workout' && (
+              <WorkoutTab
+                profile={profile}
+                updateProfile={updateProfile}
+                generatedWorkout={generatedWorkout}
+                generateWorkout={generateWorkout}
+                swapExercise={swapExercise}
+                feedbackDraft={workoutFeedback}
+                setFeedbackDraft={setWorkoutFeedback}
+                togglePain={(area) => togglePain(area, 'workoutFeedback')}
+                logFeedback={() => logFeedback('workout', workoutFeedback)}
+              />
+            )}
+
+            {activeTab === 'mobility' && (
+              <MobilityTab
+                profile={profile}
+                updateProfile={updateProfile}
+                mobilityScores={mobilityScores}
+                mode={mobilityMode}
+                setMode={setMobilityMode}
+                generatedMobility={generatedMobility}
+                generateMobility={generateMobility}
+                feedbackDraft={mobilityFeedback}
+                setFeedbackDraft={setMobilityFeedback}
+                togglePain={(area) => togglePain(area, 'mobilityFeedback')}
+                logFeedback={() => logFeedback('mobility', mobilityFeedback)}
+              />
+            )}
+
+            {activeTab === 'calibration' && (
+              <CalibrationTab
+                profile={profile}
+                updateProfile={updateProfile}
+                scores={calibrationScores}
+                setScores={setCalibrationScores}
+                togglePain={(area) => togglePain(area, 'profile')}
+                completeCalibration={completeCalibration}
+              />
+            )}
+
+            {activeTab === 'exercises' && (
+              <ExerciseLibraryTab
+                query={exerciseQuery}
+                setQuery={setExerciseQuery}
+                filter={exerciseFilter}
+                setFilter={setExerciseFilter}
+                items={filteredExercises}
+              />
+            )}
+
+            {activeTab === 'stretches' && (
+              <StretchLibraryTab
+                query={stretchQuery}
+                setQuery={setStretchQuery}
+                area={stretchArea}
+                setArea={setStretchArea}
+                items={filteredStretches}
+              />
+            )}
+
+            {activeTab === 'progress' && (
+              <ProgressTab history={history} feedback={feedback} mobilityScores={mobilityScores} />
+            )}
+
+            {activeTab === 'settings' && (
+              <SettingsTab
+                userEmail={userEmail}
+                profile={profile}
+                updateProfile={updateProfile}
+                equipmentProfile={equipmentProfile}
+                toggleEquipment={toggleEquipment}
+                togglePain={(area) => togglePain(area, 'profile')}
+              />
+            )}
+          </div>
+
+          <aside className="hidden flex-col gap-4 lg:flex">
+            <Panel title="Readiness" eyebrow="Today">
+              <div className="grid grid-cols-2 gap-3">
+                <Metric label="Energy" value={`${profile.readinessLevel}%`} tone="green" />
+                <Metric label="Soreness" value={`${profile.sorenessLevel}/10`} tone={profile.sorenessLevel > 6 ? 'red' : 'amber'} />
+              </div>
+            </Panel>
+            <Panel title="Mobility scores" eyebrow="Calibration">
+              <div className="flex flex-col gap-2">
+                {weakestScores.map((score) => <ScoreRow key={score.area} score={score} />)}
+              </div>
+            </Panel>
+            <Panel title="Status" eyebrow="Engine">
+              <p className="text-sm leading-6 text-zinc-300">{statusMessage}</p>
+            </Panel>
+          </aside>
+        </section>
+      </section>
+
+      <nav className="fixed bottom-0 left-0 right-0 z-40 border-t border-white/10 bg-[#070807]/95 px-3 py-3 backdrop-blur lg:hidden">
+        <div className="mx-auto grid max-w-md grid-cols-4 gap-2">
+          {tabs.slice(0, 4).map(({ key, label, Icon }) => (
+            <button key={key} onClick={() => setActiveTab(key)} className={`rounded-xl px-2 py-2 text-xs font-black ${activeTab === key ? 'bg-orange-500 text-black' : 'bg-white/10 text-zinc-200'}`}>
+              <Icon className="mx-auto h-4 w-4" />
+              <span className="mt-1 block">{label}</span>
+            </button>
+          ))}
+        </div>
+      </nav>
+    </main>
+  );
+}
+
+function HomeDashboard({
+  userEmail,
+  profile,
+  mobilityScore,
+  weakestScores,
+  recentPatterns,
+  generatedWorkout,
+  generatedMobility,
+  generateWorkout,
+  generateMobility,
+  setActiveTab,
+}: {
+  userEmail: string | null;
+  profile: UserProfile;
+  mobilityScore: number;
+  weakestScores: MobilityScore[];
+  recentPatterns: MovementPattern[];
+  generatedWorkout: WorkoutSession | null;
+  generatedMobility: MobilitySession | null;
+  generateWorkout: () => void;
+  generateMobility: () => void;
+  setActiveTab: (tab: TabKey) => void;
+}) {
+  return (
+    <>
+      <section className="grid gap-3 sm:grid-cols-3">
+        <StatCard icon={Zap} label="Readiness" value={`${profile.readinessLevel}%`} detail={`${profile.sorenessLevel}/10 soreness`} />
+        <StatCard icon={HeartPulse} label="Mobility" value={`${mobilityScore}`} detail={weakestScores.map((score) => formatArea(score.area)).join(', ')} />
+        <StatCard icon={Shield} label="Combat load" value={`${profile.combatSchedule.mma + profile.combatSchedule.bjj + profile.combatSchedule.wrestling + profile.combatSchedule.striking}/wk`} detail={goalLabel(profile.goal)} />
+      </section>
+
+      <Panel title="Today" eyebrow={userEmail ?? 'Demo athlete'}>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <button onClick={generateWorkout} className="rounded-xl border border-orange-400/30 bg-orange-500 px-4 py-4 text-left text-black">
+            <Dumbbell className="h-5 w-5" />
+            <span className="mt-3 block text-lg font-black">Generate workout</span>
+            <span className="mt-1 block text-sm font-semibold text-black/70">{profile.workoutLength} min, {profile.equipment.slice(0, 3).join(', ')}</span>
+          </button>
+          <button onClick={generateMobility} className="rounded-xl border border-emerald-300/30 bg-emerald-400 px-4 py-4 text-left text-black">
+            <Activity className="h-5 w-5" />
+            <span className="mt-3 block text-lg font-black">Generate mobility</span>
+            <span className="mt-1 block text-sm font-semibold text-black/70">{profile.mobilityMinutes} min, lowest areas first</span>
+          </button>
+        </div>
+      </Panel>
+
+      <section className="grid gap-4 lg:grid-cols-2">
+        <Panel title="Next workout" eyebrow={generatedWorkout ? generatedWorkout.focus : 'Not generated'}>
+          {generatedWorkout ? (
+            <CompactWorkout workout={generatedWorkout} />
+          ) : (
+            <EmptyState text="Run calibration or generate from defaults." action="Open Workout" onClick={() => setActiveTab('workout')} />
+          )}
+        </Panel>
+        <Panel title="Next mobility" eyebrow={generatedMobility ? generatedMobility.scoreSummary : 'Not generated'}>
+          {generatedMobility ? (
+            <CompactMobility routine={generatedMobility} />
+          ) : (
+            <EmptyState text="Mobility uses your lowest scores and session mode." action="Open Mobility" onClick={() => setActiveTab('mobility')} />
+          )}
+        </Panel>
+      </section>
+
+      <Panel title="Recent training pressure" eyebrow="Balance">
+        <div className="flex flex-wrap gap-2">
+          {(recentPatterns.length ? recentPatterns : ['push', 'pull', 'squat', 'hinge', 'core'] as MovementPattern[]).slice(0, 12).map((pattern, index) => (
+            <span key={`${pattern}-${index}`} className="rounded-full border border-white/10 bg-white/10 px-3 py-2 text-xs font-black text-zinc-200">{pattern}</span>
+          ))}
+        </div>
+      </Panel>
+    </>
+  );
+}
+
+function WorkoutTab({
+  profile,
+  updateProfile,
+  generatedWorkout,
+  generateWorkout,
+  swapExercise,
+  feedbackDraft,
+  setFeedbackDraft,
+  togglePain,
+  logFeedback,
+}: {
+  profile: UserProfile;
+  updateProfile: (next: Partial<UserProfile>) => void;
+  generatedWorkout: WorkoutSession | null;
+  generateWorkout: () => void;
+  swapExercise: (exercise: WorkoutExercise) => void;
+  feedbackDraft: FeedbackDraft;
+  setFeedbackDraft: (next: FeedbackDraft | ((old: FeedbackDraft) => FeedbackDraft)) => void;
+  togglePain: (area: MobilityArea) => void;
+  logFeedback: () => void;
+}) {
+  return (
+    <>
+      <Panel title="Workout builder" eyebrow="Personalized">
+        <div className="grid gap-3 sm:grid-cols-2">
+          <SelectField label="Goal" value={profile.goal} options={goalOptions} onChange={(value) => updateProfile({ goal: value as TrainingGoal })} />
+          <SelectField
+            label="Experience"
+            value={profile.experienceLevel}
+            options={[
+              { label: 'Beginner', value: 'beginner' },
+              { label: 'Intermediate', value: 'intermediate' },
+              { label: 'Advanced', value: 'advanced' },
+              { label: 'Competitive', value: 'competitive' },
+            ]}
+            onChange={(value) => updateProfile({ experienceLevel: value as UserProfile['experienceLevel'] })}
+          />
+          <SliderField label="Workout length" value={profile.workoutLength} min={20} max={75} suffix="min" onChange={(value) => updateProfile({ workoutLength: value })} />
+          <SliderField label="Energy readiness" value={profile.readinessLevel} min={1} max={100} suffix="%" onChange={(value) => updateProfile({ readinessLevel: value })} />
+          <SliderField label="Soreness" value={profile.sorenessLevel} min={1} max={10} suffix="/10" onChange={(value) => updateProfile({ sorenessLevel: value })} />
+          <SliderField label="Training days" value={profile.trainingDaysPerWeek} min={1} max={7} suffix="/wk" onChange={(value) => updateProfile({ trainingDaysPerWeek: value })} />
+        </div>
+
+        <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
+          {(['mma', 'bjj', 'wrestling', 'striking'] as const).map((sport) => (
+            <NumberStepper
+              key={sport}
+              label={sport.toUpperCase()}
+              value={profile.combatSchedule[sport]}
+              onChange={(value) => updateProfile({ combatSchedule: { ...profile.combatSchedule, [sport]: value } })}
+            />
+          ))}
+        </div>
+
+        <PainPicker selected={profile.painAreas} togglePain={togglePain} />
+        <button onClick={generateWorkout} className="mt-5 inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-orange-500 px-4 font-black text-black">
+          <Zap className="h-5 w-5" />
+          Generate personalized workout
+        </button>
+      </Panel>
+
+      {generatedWorkout && (
+        <Panel title={generatedWorkout.title} eyebrow={generatedWorkout.readinessAdjustment}>
+          <div className="rounded-xl border border-amber-300/20 bg-amber-300/10 p-3 text-sm text-amber-100">
+            <AlertTriangle className="mr-2 inline h-4 w-4" />
+            {generatedWorkout.safetyNote}
+          </div>
+          <div className="mt-4 flex flex-col gap-3">
+            {generatedWorkout.exercises.map((exercise) => (
+              <ExerciseCard key={`${exercise.phase}-${exercise.item.id}`} exercise={exercise} onSwap={() => swapExercise(exercise)} />
+            ))}
+          </div>
+          <div className="mt-4 border-t border-white/10 pt-4">
+            <h3 className="text-sm font-black uppercase tracking-[0.18em] text-zinc-400">Cooldown mobility</h3>
+            <div className="mt-3 grid gap-3">
+              {generatedWorkout.mobilitySteps.map((step) => <StretchCard key={step.item.id} step={step} />)}
+            </div>
+          </div>
+        </Panel>
+      )}
+
+      {generatedWorkout && (
+        <FeedbackPanel
+          title="Workout feedback"
+          draft={feedbackDraft}
+          setDraft={setFeedbackDraft}
+          togglePain={togglePain}
+          logFeedback={logFeedback}
+        />
+      )}
+    </>
+  );
+}
+
+function MobilityTab({
+  profile,
+  updateProfile,
+  mobilityScores,
+  mode,
+  setMode,
+  generatedMobility,
+  generateMobility,
+  feedbackDraft,
+  setFeedbackDraft,
+  togglePain,
+  logFeedback,
+}: {
+  profile: UserProfile;
+  updateProfile: (next: Partial<UserProfile>) => void;
+  mobilityScores: MobilityScore[];
+  mode: MobilitySessionMode;
+  setMode: (mode: MobilitySessionMode) => void;
+  generatedMobility: MobilitySession | null;
+  generateMobility: () => void;
+  feedbackDraft: FeedbackDraft;
+  setFeedbackDraft: (next: FeedbackDraft | ((old: FeedbackDraft) => FeedbackDraft)) => void;
+  togglePain: (area: MobilityArea) => void;
+  logFeedback: () => void;
+}) {
+  return (
+    <>
+      <Panel title="Mobility scores" eyebrow="1-100 by area">
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+          {mobilityScores.map((score) => <ScoreCard key={score.area} score={score} />)}
+        </div>
+      </Panel>
+
+      <Panel title="Routine builder" eyebrow="Adaptive sequence">
+        <div className="grid gap-3 sm:grid-cols-3">
+          {(['pre_workout', 'post_workout', 'recovery_day'] as MobilitySessionMode[]).map((item) => (
+            <button
+              key={item}
+              onClick={() => setMode(item)}
+              className={`rounded-xl border px-4 py-3 text-left text-sm font-black ${mode === item ? 'border-emerald-300 bg-emerald-400 text-black' : 'border-white/10 bg-white/10 text-zinc-200'}`}
+            >
+              {item.replace('_', ' ')}
+            </button>
+          ))}
+        </div>
+        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+          <SliderField label="Time available" value={profile.mobilityMinutes} min={4} max={20} suffix="min" onChange={(value) => updateProfile({ mobilityMinutes: value })} />
+          <SliderField label="Energy readiness" value={profile.readinessLevel} min={1} max={100} suffix="%" onChange={(value) => updateProfile({ readinessLevel: value })} />
+        </div>
+        <button onClick={generateMobility} className="mt-5 inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-emerald-400 px-4 font-black text-black">
+          <Activity className="h-5 w-5" />
+          Generate mobility routine
+        </button>
+      </Panel>
+
+      {generatedMobility && (
+        <Panel title={generatedMobility.title} eyebrow={generatedMobility.scoreSummary}>
+          <div className="mb-4 flex flex-wrap gap-2">
+            {generatedMobility.targetAreas.map((area) => <Tag key={area}>{formatArea(area)}</Tag>)}
+          </div>
+          <div className="grid gap-3">
+            {generatedMobility.steps.map((step) => <StretchCard key={step.item.id} step={step} />)}
+          </div>
+        </Panel>
+      )}
+
+      {generatedMobility && (
+        <FeedbackPanel
+          title="Mobility feedback"
+          draft={feedbackDraft}
+          setDraft={setFeedbackDraft}
+          togglePain={togglePain}
+          logFeedback={logFeedback}
+        />
+      )}
+    </>
+  );
+}
+
+function CalibrationTab({
+  profile,
+  updateProfile,
+  scores,
+  setScores,
+  togglePain,
+  completeCalibration,
+}: {
+  profile: UserProfile;
+  updateProfile: (next: Partial<UserProfile>) => void;
+  scores: Record<CalibrationTestKey, number>;
+  setScores: (scores: Record<CalibrationTestKey, number>) => void;
+  togglePain: (area: MobilityArea) => void;
+  completeCalibration: () => void;
+}) {
+  return (
+    <>
+      <Panel title="Profile setup" eyebrow="Step 1">
+        <div className="grid gap-3 sm:grid-cols-2">
+          <SelectField label="Main goal" value={profile.goal} options={goalOptions} onChange={(value) => updateProfile({ goal: value as TrainingGoal })} />
+          <SelectField
+            label="Experience"
+            value={profile.experienceLevel}
+            options={[
+              { label: 'Beginner', value: 'beginner' },
+              { label: 'Intermediate', value: 'intermediate' },
+              { label: 'Advanced', value: 'advanced' },
+              { label: 'Competitive', value: 'competitive' },
+            ]}
+            onChange={(value) => updateProfile({ experienceLevel: value as UserProfile['experienceLevel'] })}
+          />
+          <SliderField label="Training days" value={profile.trainingDaysPerWeek} min={1} max={7} suffix="/wk" onChange={(value) => updateProfile({ trainingDaysPerWeek: value })} />
+          <SliderField label="Workout length" value={profile.workoutLength} min={20} max={75} suffix="min" onChange={(value) => updateProfile({ workoutLength: value })} />
+        </div>
+        <PainPicker selected={profile.painAreas} togglePain={togglePain} />
+      </Panel>
+
+      <Panel title="Sport schedule" eyebrow="Step 2">
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          {(['mma', 'bjj', 'wrestling', 'striking'] as const).map((sport) => (
+            <NumberStepper
+              key={sport}
+              label={sport.toUpperCase()}
+              value={profile.combatSchedule[sport]}
+              onChange={(value) => updateProfile({ combatSchedule: { ...profile.combatSchedule, [sport]: value } })}
+            />
+          ))}
+        </div>
+      </Panel>
+
+      <Panel title="Mobility self-tests" eyebrow="Step 3">
+        <div className="flex flex-col gap-4">
+          {calibrationTests.map((test) => (
+            <article key={test.id} className="rounded-xl border border-white/10 bg-black/25 p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-xs font-black uppercase tracking-[0.18em] text-emerald-300">{formatArea(test.area)}</p>
+                  <h3 className="mt-1 text-lg font-black">{test.name}</h3>
+                </div>
+                <span className="rounded-xl bg-white px-3 py-2 text-sm font-black text-black">{scores[test.id]}</span>
+              </div>
+              <ol className="mt-3 list-decimal space-y-1 pl-5 text-sm leading-6 text-zinc-300">
+                {test.instructions.map((item) => <li key={item}>{item}</li>)}
+              </ol>
+              <p className="mt-3 text-sm text-zinc-400">{test.scoring}</p>
+              <p className="mt-2 text-xs font-bold text-zinc-500">{test.example}</p>
+              <input
+                className="mt-4 w-full accent-orange-500"
+                type="range"
+                min="1"
+                max="100"
+                value={scores[test.id]}
+                onChange={(event) => setScores({ ...scores, [test.id]: Number(event.target.value) })}
+              />
+            </article>
+          ))}
+        </div>
+        <button onClick={completeCalibration} className="mt-5 inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-orange-500 px-4 font-black text-black">
+          <CheckCircle2 className="h-5 w-5" />
+          Complete calibration
+        </button>
+      </Panel>
+    </>
+  );
+}
+
+function ExerciseLibraryTab({
+  query,
+  setQuery,
+  filter,
+  setFilter,
+  items,
+}: {
+  query: string;
+  setQuery: (value: string) => void;
+  filter: 'all' | MovementPattern;
+  setFilter: (value: 'all' | MovementPattern) => void;
+  items: ExerciseLibraryItem[];
+}) {
+  return (
+    <Panel title="Exercise library" eyebrow={`${items.length} movements`}>
+      <div className="grid gap-3 sm:grid-cols-[1fr_180px]">
+        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search movements" className="h-12 rounded-xl border border-white/10 bg-black/30 px-4 font-semibold outline-none" />
+        <select value={filter} onChange={(event) => setFilter(event.target.value as 'all' | MovementPattern)} className="h-12 rounded-xl border border-white/10 bg-black/30 px-4 font-semibold outline-none">
+          {movementFilters.map((item) => <option key={item}>{item}</option>)}
+        </select>
+      </div>
+      <div className="mt-4 grid gap-3 lg:grid-cols-2">
+        {items.map((item) => <ExerciseLibraryCard key={item.id} item={item} />)}
+      </div>
+    </Panel>
+  );
+}
+
+function StretchLibraryTab({
+  query,
+  setQuery,
+  area,
+  setArea,
+  items,
+}: {
+  query: string;
+  setQuery: (value: string) => void;
+  area: 'all' | MobilityArea;
+  setArea: (value: 'all' | MobilityArea) => void;
+  items: StretchLibraryItem[];
+}) {
+  return (
+    <Panel title="Stretch library" eyebrow={`${items.length} drills`}>
+      <div className="grid gap-3 sm:grid-cols-[1fr_180px]">
+        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search stretches" className="h-12 rounded-xl border border-white/10 bg-black/30 px-4 font-semibold outline-none" />
+        <select value={area} onChange={(event) => setArea(event.target.value as 'all' | MobilityArea)} className="h-12 rounded-xl border border-white/10 bg-black/30 px-4 font-semibold outline-none">
+          <option value="all">all</option>
+          {scoringAreas.map((item) => <option key={item} value={item}>{formatArea(item)}</option>)}
+        </select>
+      </div>
+      <div className="mt-4 grid gap-3 lg:grid-cols-2">
+        {items.map((item) => <StretchLibraryCard key={item.id} item={item} />)}
+      </div>
+    </Panel>
+  );
+}
+
+function ProgressTab({ history, feedback, mobilityScores }: { history: TrainingHistoryItem[]; feedback: UserFeedback[]; mobilityScores: MobilityScore[] }) {
+  const patternCounts = history.flatMap((item) => item.movementPatterns).reduce<Record<string, number>>((acc, pattern) => {
+    acc[pattern] = (acc[pattern] ?? 0) + 1;
+    return acc;
+  }, {});
+
+  return (
+    <>
+      <Panel title="Movement balance" eyebrow="Recent sessions">
+        <div className="grid gap-2 sm:grid-cols-4">
+          {Object.entries(patternCounts).length ? Object.entries(patternCounts).map(([pattern, count]) => (
+            <Metric key={pattern} label={pattern} value={String(count)} tone="green" />
+          )) : <p className="text-sm text-zinc-400">Complete a session to start building history.</p>}
+        </div>
+      </Panel>
+      <Panel title="Mobility trend" eyebrow="Scores">
+        <div className="grid gap-3 sm:grid-cols-3">
+          {mobilityScores.map((score) => <ScoreCard key={score.area} score={score} />)}
+        </div>
+      </Panel>
+      <Panel title="Feedback log" eyebrow={`${feedback.length} entries`}>
+        <div className="flex flex-col gap-2">
+          {feedback.slice(0, 10).map((item) => (
+            <div key={`${item.sessionId}-${item.createdAt}`} className="rounded-xl bg-black/25 px-4 py-3 text-sm text-zinc-300">
+              <span className="font-black text-white">{item.sessionType}</span> - RPE {item.rpe} - {item.completed ? 'completed' : 'partial'} - {item.pain ? `pain: ${item.painAreas.map(formatArea).join(', ')}` : 'no pain'}
+            </div>
+          ))}
+          {!feedback.length && <p className="text-sm text-zinc-400">No feedback logged yet.</p>}
+        </div>
+      </Panel>
+    </>
+  );
+}
+
+function SettingsTab({
+  userEmail,
+  profile,
+  updateProfile,
+  equipmentProfile,
+  toggleEquipment,
+  togglePain,
+}: {
+  userEmail: string | null;
+  profile: UserProfile;
+  updateProfile: (next: Partial<UserProfile>) => void;
+  equipmentProfile: EquipmentProfile;
+  toggleEquipment: (key: keyof EquipmentProfile) => void;
+  togglePain: (area: MobilityArea) => void;
+}) {
+  return (
+    <>
+      <Panel title="Profile" eyebrow={userEmail ?? 'Local athlete'}>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <SelectField label="Goal" value={profile.goal} options={goalOptions} onChange={(value) => updateProfile({ goal: value as TrainingGoal })} />
+          <SelectField
+            label="Experience"
+            value={profile.experienceLevel}
+            options={[
+              { label: 'Beginner', value: 'beginner' },
+              { label: 'Intermediate', value: 'intermediate' },
+              { label: 'Advanced', value: 'advanced' },
+              { label: 'Competitive', value: 'competitive' },
+            ]}
+            onChange={(value) => updateProfile({ experienceLevel: value as UserProfile['experienceLevel'] })}
+          />
+          <SliderField label="Training days" value={profile.trainingDaysPerWeek} min={1} max={7} suffix="/wk" onChange={(value) => updateProfile({ trainingDaysPerWeek: value })} />
+          <SliderField label="Workout length" value={profile.workoutLength} min={20} max={75} suffix="min" onChange={(value) => updateProfile({ workoutLength: value })} />
+        </div>
+      </Panel>
+      <Panel title="Equipment profile" eyebrow={`${profile.equipment.length} options`}>
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+          {(Object.keys(equipmentProfile) as (keyof EquipmentProfile)[]).map((key) => (
+            <button
+              key={key}
+              onClick={() => toggleEquipment(key)}
+              className={`min-h-12 rounded-xl border px-3 py-2 text-left text-sm font-black ${equipmentProfile[key] ? 'border-orange-300 bg-orange-500 text-black' : 'border-white/10 bg-white/10 text-zinc-200'}`}
+            >
+              {splitCamel(key)}
+            </button>
+          ))}
+        </div>
+      </Panel>
+      <Panel title="Pain and limitations" eyebrow="Safety">
+        <PainPicker selected={profile.painAreas} togglePain={togglePain} />
+      </Panel>
+    </>
+  );
+}
+
+function ExerciseCard({ exercise, onSwap }: { exercise: WorkoutExercise; onSwap: () => void }) {
+  return (
+    <article className="rounded-xl border border-white/10 bg-black/25 p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-xs font-black uppercase tracking-[0.18em] text-orange-300">{exercise.phase} - {exercise.item.movementPattern}</p>
+          <h3 className="mt-1 text-xl font-black">{exercise.item.name}</h3>
+          <p className="mt-1 text-sm text-zinc-300">
+            {exercise.sets ? `${exercise.sets} sets - ${exercise.reps}` : `${exercise.timeSeconds}s`} - rest {exercise.restSeconds}s - {exercise.rpeTarget}
+          </p>
+        </div>
+        <DifficultyTag value={exercise.item.difficulty} />
+      </div>
+      <div className="mt-3 flex flex-wrap gap-2">
+        {exercise.item.equipment.map((item) => <Tag key={item}>{item}</Tag>)}
+        {exercise.item.musclesWorked.slice(0, 4).map((item) => <Tag key={item}>{item}</Tag>)}
+      </div>
+      <p className="mt-3 text-sm leading-6 text-zinc-300">{exercise.reason}</p>
+      <p className="mt-2 text-sm leading-6 text-zinc-400">{exercise.progression}</p>
+      <MovementDetails cues={exercise.item.coachingCues} mistakes={exercise.item.commonMistakes} />
+      <div className="mt-4 grid grid-cols-2 gap-2">
+        <VideoButton item={exercise.item} />
+        <button onClick={onSwap} className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/10 text-sm font-black text-zinc-100">
+          <RotateCcw className="h-4 w-4" />
+          Swap
+        </button>
+      </div>
+    </article>
+  );
+}
+
+function StretchCard({ step }: { step: MobilitySession['steps'][number] }) {
+  return (
+    <article className="rounded-xl border border-white/10 bg-black/25 p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-xs font-black uppercase tracking-[0.18em] text-emerald-300">{step.phase} - {step.seconds}s</p>
+          <h3 className="mt-1 text-lg font-black">{step.item.name}</h3>
+          <p className="mt-1 text-sm text-zinc-300">{step.reason}</p>
+        </div>
+        <DifficultyTag value={step.item.difficulty} />
+      </div>
+      <div className="mt-3 flex flex-wrap gap-2">
+        {step.item.bodyAreas.map((area) => <Tag key={area}>{formatArea(area)}</Tag>)}
+        {step.item.equipment.map((item) => <Tag key={item}>{item}</Tag>)}
+      </div>
+      <MovementDetails cues={step.item.coachingCues} mistakes={step.item.commonMistakes} />
+      <div className="mt-4">
+        <VideoButton item={step.item} />
+      </div>
+    </article>
+  );
+}
+
+function ExerciseLibraryCard({ item }: { item: ExerciseLibraryItem }) {
+  return (
+    <article className="rounded-xl border border-white/10 bg-black/25 p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-xs font-black uppercase tracking-[0.18em] text-orange-300">{item.movementPattern}</p>
+          <h3 className="mt-1 text-lg font-black">{item.name}</h3>
+        </div>
+        <DifficultyTag value={item.difficulty} />
+      </div>
+      <div className="mt-3 flex flex-wrap gap-2">
+        {item.equipment.slice(0, 4).map((equipment) => <Tag key={equipment}>{equipment}</Tag>)}
+        {item.musclesWorked.slice(0, 4).map((muscle) => <Tag key={muscle}>{muscle}</Tag>)}
+      </div>
+      <MovementDetails cues={item.coachingCues} mistakes={item.commonMistakes} />
+      <div className="mt-4">
+        <VideoButton item={item} />
+      </div>
+    </article>
+  );
+}
+
+function StretchLibraryCard({ item }: { item: StretchLibraryItem }) {
+  return (
+    <article className="rounded-xl border border-white/10 bg-black/25 p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-xs font-black uppercase tracking-[0.18em] text-emerald-300">{item.phase}</p>
+          <h3 className="mt-1 text-lg font-black">{item.name}</h3>
+        </div>
+        <DifficultyTag value={item.difficulty} />
+      </div>
+      <div className="mt-3 flex flex-wrap gap-2">
+        {item.bodyAreas.map((area) => <Tag key={area}>{formatArea(area)}</Tag>)}
+        {item.equipment.map((equipment) => <Tag key={equipment}>{equipment}</Tag>)}
+      </div>
+      <MovementDetails cues={item.coachingCues} mistakes={item.commonMistakes} />
+      <div className="mt-4">
+        <VideoButton item={item} />
+      </div>
+    </article>
+  );
+}
+
+function FeedbackPanel({
+  title,
+  draft,
+  setDraft,
+  togglePain,
+  logFeedback,
+}: {
+  title: string;
+  draft: FeedbackDraft;
+  setDraft: (next: FeedbackDraft | ((old: FeedbackDraft) => FeedbackDraft)) => void;
+  togglePain: (area: MobilityArea) => void;
+  logFeedback: () => void;
+}) {
+  return (
+    <Panel title={title} eyebrow="Adjust next recommendation">
+      <div className="grid gap-3 sm:grid-cols-3">
+        <SliderField label="Difficulty RPE" value={draft.rpe} min={1} max={10} suffix="/10" onChange={(value) => setDraft((old) => ({ ...old, rpe: value }))} />
+        <SelectField
+          label="Form quality"
+          value={draft.formQuality}
+          options={[
+            { label: 'Poor', value: 'poor' },
+            { label: 'OK', value: 'ok' },
+            { label: 'Good', value: 'good' },
+          ]}
+          onChange={(value) => setDraft((old) => ({ ...old, formQuality: value as UserFeedback['formQuality'] }))}
+        />
+        <button onClick={() => setDraft((old) => ({ ...old, completed: !old.completed }))} className={`rounded-xl border px-4 py-3 text-left text-sm font-black ${draft.completed ? 'border-emerald-300 bg-emerald-400 text-black' : 'border-white/10 bg-white/10 text-zinc-200'}`}>
+          {draft.completed ? 'Completed' : 'Partial'}
+        </button>
+      </div>
+      <div className="mt-4 flex items-center justify-between rounded-xl border border-white/10 bg-black/25 p-3">
+        <span className="text-sm font-black">Pain or bad irritation?</span>
+        <button onClick={() => setDraft((old) => ({ ...old, pain: !old.pain }))} className={`rounded-xl px-4 py-2 text-sm font-black ${draft.pain ? 'bg-red-400 text-black' : 'bg-white/10 text-zinc-200'}`}>
+          {draft.pain ? 'Pain noted' : 'No pain'}
+        </button>
+      </div>
+      {draft.pain && <PainPicker selected={draft.painAreas} togglePain={togglePain} />}
+      <button onClick={logFeedback} className="mt-5 inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-white px-4 font-black text-black">
+        <CheckCircle2 className="h-5 w-5" />
+        Save feedback
+      </button>
+    </Panel>
+  );
+}
+
+function AuthScreen({
+  email,
+  password,
+  authMessage,
+  setEmail,
+  setPassword,
+  signIn,
+  signUp,
+  enterDemoMode,
+}: {
+  email: string;
+  password: string;
+  authMessage: string;
+  setEmail: (value: string) => void;
+  setPassword: (value: string) => void;
+  signIn: () => void;
+  signUp: () => void;
+  enterDemoMode: () => void;
+}) {
+  return (
+    <main className="min-h-screen bg-[#070807] px-4 py-8 text-white">
+      <section className="mx-auto flex max-w-md flex-col gap-4">
+        <div className="rounded-xl border border-white/10 bg-white/10 p-5 shadow-2xl">
+          <p className="text-xs font-black uppercase tracking-[0.18em] text-orange-300">ForgeFit</p>
+          <h1 className="mt-2 text-3xl font-black">Sign in</h1>
+          <div className="mt-5 flex flex-col gap-3">
+            <input value={email} onChange={(event) => setEmail(event.target.value)} placeholder="Email" className="h-12 rounded-xl border border-white/10 bg-black/30 px-4 font-semibold outline-none" />
+            <input value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Password" type="password" className="h-12 rounded-xl border border-white/10 bg-black/30 px-4 font-semibold outline-none" />
+            <button onClick={signIn} className="h-12 rounded-xl bg-orange-500 px-4 font-black text-black">Sign in</button>
+            <button onClick={signUp} className="h-12 rounded-xl border border-white/10 bg-white/10 px-4 font-black text-white">Create account</button>
+            <button onClick={enterDemoMode} className="h-12 rounded-xl border border-emerald-300/30 bg-emerald-400 px-4 font-black text-black">Demo mode</button>
+          </div>
+        </div>
+        <p className="rounded-xl border border-white/10 bg-black/25 p-4 text-sm text-orange-100">{authMessage}</p>
+      </section>
+    </main>
+  );
+}
+
+function CompactWorkout({ workout }: { workout: WorkoutSession }) {
+  return (
+    <div className="flex flex-col gap-2">
+      {workout.exercises.slice(0, 4).map((exercise) => (
+        <div key={exercise.item.id} className="flex items-center justify-between gap-3 rounded-xl bg-black/25 px-4 py-3">
+          <span className="font-bold">{exercise.item.name}</span>
+          <span className="text-xs font-black text-orange-300">{exercise.phase}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function CompactMobility({ routine }: { routine: MobilitySession }) {
+  return (
+    <div className="flex flex-col gap-2">
+      {routine.steps.slice(0, 4).map((step) => (
+        <div key={step.item.id} className="flex items-center justify-between gap-3 rounded-xl bg-black/25 px-4 py-3">
+          <span className="font-bold">{step.item.name}</span>
+          <span className="text-xs font-black text-emerald-300">{step.seconds}s</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function Panel({ title, eyebrow, children }: { title: string; eyebrow: string; children: ReactNode }) {
+  return (
+    <section className="rounded-xl border border-white/10 bg-white/5 p-4 shadow-[0_18px_60px_rgba(0,0,0,0.22)] sm:p-5">
+      <p className="text-xs font-black uppercase tracking-[0.18em] text-orange-300">{eyebrow}</p>
+      <h2 className="mt-1 text-xl font-black tracking-normal">{title}</h2>
+      <div className="mt-4">{children}</div>
+    </section>
+  );
+}
+
+function StatCard({ icon: Icon, label, value, detail }: { icon: LucideIcon; label: string; value: string; detail: string }) {
+  return (
+    <section className="rounded-xl border border-white/10 bg-white/5 p-4">
+      <div className="flex items-center justify-between">
+        <span className="text-sm font-bold text-zinc-400">{label}</span>
+        <Icon className="h-5 w-5 text-orange-300" />
+      </div>
+      <p className="mt-3 text-3xl font-black">{value}</p>
+      <p className="mt-1 min-h-5 text-xs font-semibold text-zinc-400">{detail}</p>
+    </section>
+  );
+}
+
+function Metric({ label, value, tone = 'green' }: { label: string; value: string; tone?: 'green' | 'amber' | 'red' }) {
+  const color = tone === 'red' ? 'text-red-200 bg-red-500/15' : tone === 'amber' ? 'text-amber-100 bg-amber-400/15' : 'text-emerald-100 bg-emerald-400/15';
+  return (
+    <div className={`rounded-xl p-3 ${color}`}>
+      <p className="text-xs font-black uppercase tracking-[0.16em] opacity-80">{label}</p>
+      <p className="mt-2 text-2xl font-black">{value}</p>
+    </div>
+  );
+}
+
+function SelectField({ label, value, options, onChange }: { label: string; value: string; options: { label: string; value: string }[]; onChange: (value: string) => void }) {
+  return (
+    <label className="block rounded-xl border border-white/10 bg-black/25 p-3">
+      <span className="text-xs font-black uppercase tracking-[0.16em] text-zinc-400">{label}</span>
+      <select value={value} onChange={(event) => onChange(event.target.value)} className="mt-2 h-10 w-full rounded-lg border border-white/10 bg-[#11140f] px-3 text-sm font-bold text-white outline-none">
+        {options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+      </select>
+    </label>
+  );
+}
+
+function SliderField({ label, value, min, max, suffix, onChange }: { label: string; value: number; min: number; max: number; suffix: string; onChange: (value: number) => void }) {
+  return (
+    <label className="block rounded-xl border border-white/10 bg-black/25 p-3">
+      <span className="flex items-center justify-between gap-3 text-xs font-black uppercase tracking-[0.16em] text-zinc-400">
+        {label}
+        <span className="rounded-lg bg-white px-2 py-1 text-black">{value}{suffix}</span>
+      </span>
+      <input className="mt-3 w-full accent-orange-500" type="range" min={min} max={max} value={value} onChange={(event) => onChange(Number(event.target.value))} />
+    </label>
+  );
+}
+
+function NumberStepper({ label, value, onChange }: { label: string; value: number; onChange: (value: number) => void }) {
+  return (
+    <div className="rounded-xl border border-white/10 bg-black/25 p-3">
+      <p className="text-xs font-black uppercase tracking-[0.16em] text-zinc-400">{label}</p>
+      <div className="mt-3 flex items-center justify-between gap-2">
+        <button onClick={() => onChange(Math.max(0, value - 1))} className="h-9 w-9 rounded-lg bg-white/10 font-black">-</button>
+        <span className="text-xl font-black">{value}</span>
+        <button onClick={() => onChange(Math.min(7, value + 1))} className="h-9 w-9 rounded-lg bg-orange-500 font-black text-black">+</button>
+      </div>
+    </div>
+  );
+}
+
+function PainPicker({ selected, togglePain }: { selected: MobilityArea[]; togglePain: (area: MobilityArea) => void }) {
+  return (
+    <div className="mt-4">
+      <p className="text-xs font-black uppercase tracking-[0.18em] text-zinc-400">Pain or tightness areas</p>
+      <div className="mt-2 flex flex-wrap gap-2">
+        {painOptions.map((area) => (
+          <button key={area} onClick={() => togglePain(area)} className={`rounded-full px-3 py-2 text-xs font-black ${selected.includes(area) ? 'bg-red-400 text-black' : 'bg-white/10 text-zinc-200'}`}>
+            {formatArea(area)}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ScoreCard({ score }: { score: MobilityScore }) {
+  return (
+    <div className="rounded-xl border border-white/10 bg-black/25 p-3">
+      <div className="flex items-center justify-between">
+        <p className="text-sm font-black">{formatArea(score.area)}</p>
+        <span className="rounded-lg bg-white px-2 py-1 text-sm font-black text-black">{score.score}</span>
+      </div>
+      <div className="mt-3 h-2 rounded-full bg-white/10">
+        <div className={`h-2 rounded-full ${score.score < 55 ? 'bg-red-400' : score.score < 75 ? 'bg-amber-300' : 'bg-emerald-400'}`} style={{ width: `${score.score}%` }} />
+      </div>
+    </div>
+  );
+}
+
+function ScoreRow({ score }: { score: MobilityScore }) {
+  return (
+    <div className="rounded-xl bg-black/25 p-3">
+      <div className="mb-2 flex items-center justify-between text-sm">
+        <span className="font-black">{formatArea(score.area)}</span>
+        <span className="font-black">{score.score}</span>
+      </div>
+      <div className="h-2 rounded-full bg-white/10">
+        <div className="h-2 rounded-full bg-emerald-400" style={{ width: `${score.score}%` }} />
+      </div>
+    </div>
+  );
+}
+
+function MovementDetails({ cues, mistakes }: { cues: string[]; mistakes: string[] }) {
+  return (
+    <div className="mt-3 grid gap-2 sm:grid-cols-2">
+      <div className="rounded-xl bg-emerald-400/10 p-3">
+        <p className="text-xs font-black uppercase tracking-[0.16em] text-emerald-200">Cues</p>
+        <p className="mt-2 text-sm text-zinc-300">{cues.slice(0, 3).join(' - ')}</p>
+      </div>
+      <div className="rounded-xl bg-red-400/10 p-3">
+        <p className="text-xs font-black uppercase tracking-[0.16em] text-red-200">Mistakes</p>
+        <p className="mt-2 text-sm text-zinc-300">{mistakes.slice(0, 3).join(' - ')}</p>
+      </div>
+    </div>
+  );
+}
+
+function VideoButton({ item }: { item: { videoUrl: string; videoType: string } }) {
+  return (
+    <a href={item.videoUrl} target="_blank" rel="noreferrer" className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-white px-3 text-sm font-black text-black">
+      <Video className="h-4 w-4" />
+      Watch example
+    </a>
+  );
+}
+
+function DifficultyTag({ value }: { value: string }) {
+  const tone = value === 'advanced' ? 'bg-red-400/15 text-red-100' : value === 'intermediate' ? 'bg-amber-300/15 text-amber-100' : 'bg-emerald-400/15 text-emerald-100';
+  return <span className={`rounded-full px-3 py-1 text-xs font-black ${tone}`}>{value}</span>;
+}
+
+function Tag({ children }: { children: ReactNode }) {
+  return <span className="rounded-full border border-white/10 bg-white/10 px-3 py-1 text-xs font-bold text-zinc-300">{children}</span>;
+}
+
+function EmptyState({ text, action, onClick }: { text: string; action: string; onClick: () => void }) {
+  return (
+    <div className="rounded-xl border border-dashed border-white/15 bg-black/20 p-4">
+      <p className="text-sm text-zinc-400">{text}</p>
+      <button onClick={onClick} className="mt-3 inline-flex h-10 items-center gap-2 rounded-xl bg-white px-3 text-sm font-black text-black">
+        <Play className="h-4 w-4" />
+        {action}
+      </button>
+    </div>
+  );
+}
+
+function historyFromWorkout(workout: WorkoutSession, entry: UserFeedback): TrainingHistoryItem {
+  return {
+    completedAt: entry.createdAt,
+    muscles: Array.from(new Set(workout.exercises.flatMap((exercise) => exercise.item.musclesWorked.map((muscle) => muscle.toLowerCase())))),
+    movementPatterns: Array.from(new Set(workout.exercises.map((exercise) => exercise.item.movementPattern))),
+    rpe: entry.rpe,
+    pain: entry.pain,
+  };
+}
+
+function mapProfileRow(row: Record<string, unknown>, fallback: UserProfile): UserProfile {
+  const goalText = String(row.primary_goal ?? row.goal ?? '').toLowerCase();
+  const experienceText = String(row.experience_level ?? row.training_experience ?? fallback.experienceLevel).toLowerCase();
+  return {
+    ...fallback,
+    goal: goalText.includes('strength') ? 'strength' : goalText.includes('muscle') ? 'muscle' : goalText.includes('fat') ? 'fat_loss' : goalText.includes('endurance') ? 'endurance' : goalText.includes('mobility') ? 'mobility' : goalText.includes('mma') || goalText.includes('bjj') ? 'mma_bjj' : fallback.goal,
+    experienceLevel: experienceText.includes('beginner') ? 'beginner' : experienceText.includes('advanced') ? 'advanced' : experienceText.includes('competitive') ? 'competitive' : 'intermediate',
+    equipment: Array.isArray(row.equipment_profile) ? row.equipment_profile as string[] : fallback.equipment,
+    painAreas: Array.isArray(row.limitations) ? mapLimitationsToPain(row.limitations as string[]) : fallback.painAreas,
+  };
+}
+
+function mapLimitationsToPain(limitations: string[]): MobilityArea[] {
+  const text = limitations.join(' ').toLowerCase();
+  return painOptions.filter((area) => text.includes(formatArea(area)) || areaAliasesForProfile(area).some((alias) => text.includes(alias)));
+}
+
+function areaAliasesForProfile(area: MobilityArea) {
+  if (area === 'lower_back') return ['back', 'low back'];
+  if (area === 'hip_flexors') return ['hip flexor'];
+  if (area === 'thoracic_spine') return ['t spine', 'upper back'];
+  return [area];
+}
+
+function equipmentListToProfile(list: string[]): EquipmentProfile {
+  const text = list.join(' ').toLowerCase();
+  return {
+    bodyweight: true,
+    dumbbells: text.includes('dumbbell'),
+    gym: text.includes('gym'),
+    planetFitness: text.includes('planet'),
+    bands: text.includes('band'),
+    pullupBar: text.includes('pull'),
+    machines: text.includes('machine'),
+    cables: text.includes('cable'),
+    barbell: text.includes('barbell'),
+    kettlebells: text.includes('kettlebell'),
+    medicineBall: text.includes('medicine'),
+    foamRoller: text.includes('foam'),
+    bench: text.includes('bench'),
+  };
+}
+
+function toggleList<T>(list: T[], item: T) {
+  return list.includes(item) ? list.filter((entry) => entry !== item) : [...list, item];
+}
+
+function readJson<T>(key: string, fallback: T): T {
+  if (typeof window === 'undefined') return fallback;
+  try {
+    const value = window.localStorage.getItem(key);
+    return value ? JSON.parse(value) as T : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function writeJson<T>(key: string, value: T) {
+  if (typeof window === 'undefined') return;
+  window.localStorage.setItem(key, JSON.stringify(value));
+}
+
+function formatArea(area: MobilityArea) {
+  return area.replaceAll('_', ' ');
+}
+
+function splitCamel(value: string) {
+  return value.replace(/([A-Z])/g, ' $1').toLowerCase();
+}
+
+function goalLabel(goal: TrainingGoal) {
+  return goalOptions.find((item) => item.value === goal)?.label ?? goal;
+}

@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
+import type { AuthChangeEvent, Session } from '@supabase/supabase-js';
 import { createClient } from '@/lib/supabase/client';
 
 export default function ProfileGate() {
@@ -15,7 +16,7 @@ export default function ProfileGate() {
     async function checkProfile() {
       if (!active) return;
       const path = pathname ?? '/';
-      if (path.startsWith('/coach') || path.startsWith('/profile')) return;
+      if (path === '/' || path.startsWith('/coach') || path.startsWith('/profile')) return;
 
       const { data: sessionData } = await supabase.auth.getSession();
       const user = sessionData.session?.user;
@@ -32,7 +33,7 @@ export default function ProfileGate() {
     }
 
     checkProfile();
-    const { data } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data } = supabase.auth.onAuthStateChange((_event: AuthChangeEvent, session: Session | null) => {
       if (session?.user) setTimeout(checkProfile, 0);
     });
 
