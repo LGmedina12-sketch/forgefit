@@ -1,12 +1,14 @@
 import { exerciseLibrary } from '@/lib/data/exercises';
 import { stretchLibrary } from '@/lib/data/mobility';
 import { calibrationTests, scoringAreas } from '@/lib/training/calibration';
+import { mobilityAreasFromWorkoutType, patternsForWorkoutType, recommendWorkoutType, workoutTypeLabels } from '@/lib/training/scheduler';
 import type {
   CalibrationResult,
   EquipmentProfile,
   ExerciseLibraryItem,
   ExercisePhase,
   MobilityArea,
+  MobilityHistoryItem,
   MobilityScore,
   MobilitySession,
   MobilitySessionMode,
@@ -35,6 +37,8 @@ export type GenerateMobilityInput = {
   mode: MobilitySessionMode;
   timeAvailable: number;
   feedback: UserFeedback[];
+  history?: TrainingHistoryItem[];
+  mobilityHistory?: MobilityHistoryItem[];
   library?: StretchLibraryItem[];
 };
 
@@ -170,13 +174,16 @@ export function updateScoresFromFeedback(scores: MobilityScore[], feedback: User
 export function generateWorkoutPlan(input: GenerateWorkoutInput): WorkoutSession {
   const library = input.library?.length ? input.library : exerciseLibrary;
   const safeEquipment = input.profile.equipment.length ? input.profile.equipment : ['bodyweight'];
+  const recommendation = recommendWorkoutType(input.profile, input.history, input.feedback);
   const overtrained = preventOvertraining(input.history);
   const difficulty = adjustDifficulty(input.profile, input.feedback);
   const recentFeedback = input.feedback.slice(-3);
   const painAreas = Array.from(new Set([...input.profile.painAreas, ...recentFeedback.flatMap((item) => item.painAreas)]));
-  const targetPatterns = choosePatternPlan(input.profile.goal, input.profile.combatSchedule);
+  const targetPatterns = patternsForWorkoutType(recommendation.workoutType, input.profile.goal, input.profile.combatSchedule);
   const readinessPenalty = input.profile.readinessLevel < 55 || input.profile.sorenessLevel > 7;
-  const count = input.profile.workoutLength <= 30 ? 5 : input.profile.workoutLength <= 45 ? 7 : 9;
+  const recoveryDay = recommendation.workoutType === 'recovery' || recommendation.workoutType === 'mobility_only';
+  const restDay = recommendation.workoutType === 'rest';
+  const count = restDay ? 0 : recoveryDay ? 3 : input.profile.workoutLength <= 30 ? 5 : input.profile.workoutLength <= 45 ? 7 : 9;
   const scored = library
     .filter((item) => hasEquipment(item.equipment, safeEquipment))
     .map((item) => ({
@@ -195,7 +202,11 @@ export function generateWorkoutPlan(input: GenerateWorkoutInput): WorkoutSession
     .sort((a, b) => b.score - a.score || a.item.name.localeCompare(b.item.name));
 
   const chosen: ExerciseLibraryItem[] = [];
-  const phases: ExercisePhase[] = count <= 5
+  const phases: ExercisePhase[] = restDay
+    ? []
+    : recoveryDay
+      ? ['warmup', 'mobility', 'cooldown']
+      : count <= 5
     ? ['warmup', 'main', 'accessory', 'conditioning', 'cooldown']
     : (['warmup', 'warmup', 'main', 'main', 'accessory', 'accessory', 'conditioning', 'cooldown', 'mobility'] as ExercisePhase[]).slice(0, count);
 
@@ -215,9 +226,10 @@ export function generateWorkoutPlan(input: GenerateWorkoutInput): WorkoutSession
   const mobilitySteps = generateMobilityPlan({
     profile: input.profile,
     mobilityScores: input.mobilityScores,
-    mode: 'post_workout',
-    timeAvailable: Math.min(8, Math.max(4, Math.round(input.profile.workoutLength * 0.15))),
+    mode: recoveryDay || restDay ? 'recovery_day' : 'post_workout',
+    timeAvailable: recoveryDay || restDay ? input.profile.mobilityMinutes : Math.min(8, Math.max(4, Math.round(input.profile.workoutLength * 0.15))),
     feedback: input.feedback,
+    history: input.history,
   }).steps.slice(0, 3);
 
   const patternBalance = summarizePatterns(exercises.map((item) => item.item));
@@ -225,12 +237,16 @@ export function generateWorkoutPlan(input: GenerateWorkoutInput): WorkoutSession
 
   return {
     id: `workout-${Date.now()}`,
-    title: `${goalLabels[input.profile.goal]} session`,
+    title: `${workoutTypeLabels[recommendation.workoutType]} ${goalLabels[input.profile.goal]} session`,
     focus: targetPatterns.slice(0, 4).join(' / '),
-    durationMinutes: input.profile.workoutLength,
+    workoutType: recommendation.workoutType,
+    durationMinutes: restDay ? 0 : recoveryDay ? Math.min(input.profile.workoutLength, 30) : input.profile.workoutLength,
     readinessAdjustment: readinessPenalty
       ? 'Volume and intensity reduced because soreness/readiness is not ideal.'
       : 'Normal adaptive volume based on current readiness.',
+    recommendationReason: recommendation.reason,
+    missedDays: recommendation.missedDays,
+    planLabel: recommendation.planLabel,
     safetyNote: lowered
       ? 'Pain or low readiness detected: use clean reps, stop sharp pain, and swap anything that feels wrong.'
       : 'No max effort required today. Keep 1-3 reps in reserve unless a coach tells you otherwise.',
@@ -243,11 +259,14 @@ export function generateWorkoutPlan(input: GenerateWorkoutInput): WorkoutSession
 export function generateMobilityPlan(input: GenerateMobilityInput): MobilitySession {
   const library = input.library?.length ? input.library : stretchLibrary;
   const time = clamp(input.timeAvailable, 4, 20);
-  const targetAreas = chooseMobilityTargets(input.profile, input.mobilityScores, input.mode, input.feedback);
+  const targetAreas = chooseMobilityTargets(input.profile, input.mobilityScores, input.mode, input.feedback, input.history ?? []);
+  const completedMobilityCount = input.mobilityHistory?.length ?? 0;
   const stepCount = time <= 6 ? 4 : time <= 10 ? 5 : time <= 14 ? 7 : 9;
-  const seconds = Math.max(35, Math.round((time * 60) / stepCount));
+  const progressionBonus = completedMobilityCount >= 10 ? 15 : completedMobilityCount >= 4 ? 8 : 0;
+  const seconds = Math.max(35, Math.round((time * 60) / stepCount) + progressionBonus);
   const phases = mobilityPhasePlan(input.mode, stepCount, input.profile.equipment);
   const used = new Set<string>();
+  const recentDrillIds = new Set((input.mobilityHistory ?? []).slice(0, 2).flatMap((entry) => entry.drillIds));
 
   const steps = phases.map((phase, index): MobilitySessionStep | null => {
     const pool = library
@@ -255,7 +274,7 @@ export function generateMobilityPlan(input: GenerateMobilityInput): MobilitySess
       .filter((item) => hasEquipment(item.equipment, input.profile.equipment))
       .map((item) => ({
         item,
-        score: scoreStretch(item, phase, targetAreas, input.profile, input.feedback, index),
+        score: scoreStretch(item, phase, targetAreas, input.profile, input.feedback, index, recentDrillIds),
       }))
       .sort((a, b) => b.score - a.score || a.item.name.localeCompare(b.item.name));
 
@@ -279,6 +298,12 @@ export function generateMobilityPlan(input: GenerateMobilityInput): MobilitySess
     targetAreas,
     scoreSummary: summarizeScoreTargets(input.mobilityScores, targetAreas),
     steps,
+    recommendationReason: `Targets ${labelAreaList(targetAreas.slice(0, 4))} from tight areas, scores, recent workouts, and MMA/BJJ needs.`,
+    progressionNote: completedMobilityCount >= 10
+      ? 'Progression: longer holds and slower end-range control.'
+      : completedMobilityCount >= 4
+        ? 'Progression: small hold increase on familiar drills.'
+        : 'Progression: base holds until the positions feel smooth.',
   };
 }
 
@@ -357,6 +382,7 @@ function scoreStretch(
   profile: UserProfile,
   feedback: UserFeedback[],
   index: number,
+  recentDrillIds: Set<string>,
 ) {
   let score = item.phase === phase ? 40 : 8;
   score += intersectAreas(item.bodyAreas, targetAreas).length * 30;
@@ -364,6 +390,10 @@ function scoreStretch(
   if (profile.painAreas.some((area) => item.bodyAreas.includes(area))) score += 10;
   if (feedback.slice(-3).some((itemFeedback) => itemFeedback.pain && intersectAreas(item.bodyAreas, itemFeedback.painAreas).length)) {
     score += phase === 'breathing' || phase === 'static' ? 12 : -8;
+  }
+  if (recentDrillIds.has(item.id)) {
+    const neededRepeat = profile.sorenessLevel >= 8 || profile.painAreas.some((area) => item.bodyAreas.includes(area));
+    score -= neededRepeat ? 12 : 48;
   }
   score -= index;
   return score;
@@ -441,15 +471,17 @@ function chooseMobilityTargets(
   scores: MobilityScore[],
   mode: MobilitySessionMode,
   feedback: UserFeedback[],
+  history: TrainingHistoryItem[] = [],
 ) {
   const painTargets = profile.painAreas.filter((area) => scoringAreas.includes(area));
   const feedbackPain = feedback.slice(-3).flatMap((item) => item.painAreas).filter((area) => scoringAreas.includes(area));
   const weak = [...scores].sort((a, b) => a.score - b.score).slice(0, mode === 'recovery_day' ? 4 : 3).map((item) => item.area);
+  const recentWorkoutAreas = mobilityAreasFromWorkoutType(history.find((entry) => entry.workoutType)?.workoutType);
   const sportNeeds: MobilityArea[] = profile.goal === 'mma_bjj'
     ? ['hips', 'thoracic_spine', 'ankles', 'shoulders', 'adductors', 'rotation']
     : ['hips', 'hamstrings', 'shoulders', 'thoracic_spine'];
 
-  return Array.from(new Set([...painTargets, ...feedbackPain, ...weak, ...sportNeeds])).slice(0, 6);
+  return Array.from(new Set([...painTargets, ...feedbackPain, ...recentWorkoutAreas, ...weak, ...sportNeeds])).slice(0, 6);
 }
 
 function mobilityPhasePlan(mode: MobilitySessionMode, count: number, equipment: string[]) {

@@ -18,6 +18,7 @@ import {
   TrendingUp,
   User,
   Video,
+  X,
   Zap,
   type LucideIcon,
 } from 'lucide-react';
@@ -33,12 +34,15 @@ import {
   generateWorkoutPlan,
   updateScoresFromFeedback,
 } from '@/lib/training/recommendationEngine';
+import { getVideoEmbedUrl, validateVideoLibrary, validateVideoUrl } from '@/lib/training/media';
+import { planLabels, workoutTypeLabels } from '@/lib/training/scheduler';
 import type {
   CalibrationResult,
   CalibrationTestKey,
   EquipmentProfile,
   ExerciseLibraryItem,
   MobilityArea,
+  MobilityHistoryItem,
   MobilityScore,
   MobilitySession,
   MobilitySessionMode,
@@ -46,6 +50,7 @@ import type {
   StretchLibraryItem,
   TrainingGoal,
   TrainingHistoryItem,
+  TrainingPlanType,
   UserFeedback,
   UserProfile,
   WorkoutExercise,
@@ -68,6 +73,7 @@ const storageKeys = {
   calibration: 'forgefit-v2-calibration',
   mobilityScores: 'forgefit-v2-mobility-scores',
   history: 'forgefit-v2-history',
+  mobilityHistory: 'forgefit-v2-mobility-history',
   feedback: 'forgefit-v2-feedback',
 };
 
@@ -90,6 +96,14 @@ const goalOptions: { label: string; value: TrainingGoal }[] = [
   { label: 'MMA/BJJ support', value: 'mma_bjj' },
   { label: 'Mobility', value: 'mobility' },
   { label: 'Endurance', value: 'endurance' },
+];
+
+const planOptions: { label: string; value: TrainingPlanType }[] = [
+  { label: planLabels.push_pull_legs, value: 'push_pull_legs' },
+  { label: planLabels.upper_lower, value: 'upper_lower' },
+  { label: planLabels.full_body, value: 'full_body' },
+  { label: planLabels.mma_bjj_athletic, value: 'mma_bjj_athletic' },
+  { label: planLabels.mobility_only, value: 'mobility_only' },
 ];
 
 const painOptions: MobilityArea[] = [
@@ -123,6 +137,7 @@ const movementFilters: ('all' | MovementPattern)[] = [
 const defaultEquipment = defaultEquipmentProfile();
 const defaultProfile: UserProfile = {
   goal: 'mma_bjj',
+  trainingPlan: 'push_pull_legs',
   equipment: equipmentProfileToList(defaultEquipment),
   trainingDaysPerWeek: 3,
   combatSchedule: { mma: 1, bjj: 2, wrestling: 1, striking: 0 },
@@ -156,6 +171,7 @@ export default function Page() {
   const [calibrationScores, setCalibrationScores] = useState<Record<CalibrationTestKey, number>>(defaultCalibrationScores);
   const [mobilityScores, setMobilityScores] = useState<MobilityScore[]>(defaultMobilityScores);
   const [history, setHistory] = useState<TrainingHistoryItem[]>([]);
+  const [mobilityHistory, setMobilityHistory] = useState<MobilityHistoryItem[]>([]);
   const [feedback, setFeedback] = useState<UserFeedback[]>([]);
   const [generatedWorkout, setGeneratedWorkout] = useState<WorkoutSession | null>(null);
   const [generatedMobility, setGeneratedMobility] = useState<MobilitySession | null>(null);
@@ -171,6 +187,7 @@ export default function Page() {
   const globalMobilityScore = Math.round(mobilityScores.reduce((sum, score) => sum + score.score, 0) / Math.max(1, mobilityScores.length));
   const weakestScores = [...mobilityScores].sort((a, b) => a.score - b.score).slice(0, 3);
   const recentPatterns = history.slice(0, 4).flatMap((item) => item.movementPatterns);
+  const videoIssues = validateVideoLibrary().filter((item) => item.status === 'invalid' || item.status === 'placeholder');
   const filteredExercises = exerciseLibrary.filter((item) => {
     const query = exerciseQuery.trim().toLowerCase();
     const matchesQuery = !query || [item.name, item.category, item.movementPattern, ...item.musclesWorked, ...item.equipment].join(' ').toLowerCase().includes(query);
@@ -185,12 +202,31 @@ export default function Page() {
   });
 
   useEffect(() => {
-    setProfile(readJson(storageKeys.profile, defaultProfile));
-    setEquipmentProfile(readJson(storageKeys.equipment, defaultEquipment));
-    setCalibrationScores(readJson(storageKeys.calibration, defaultCalibrationScores));
-    setMobilityScores(readJson(storageKeys.mobilityScores, defaultMobilityScores));
-    setHistory(readJson(storageKeys.history, []));
-    setFeedback(readJson(storageKeys.feedback, []));
+    const storedProfile = withProfileDefaults(readJson(storageKeys.profile, defaultProfile));
+    const storedEquipment = readJson(storageKeys.equipment, defaultEquipment);
+    const storedCalibration = readJson(storageKeys.calibration, defaultCalibrationScores);
+    const storedScores = readJson(storageKeys.mobilityScores, defaultMobilityScores);
+    const storedHistory = readJson<TrainingHistoryItem[]>(storageKeys.history, []);
+    const storedMobilityHistory = readJson<MobilityHistoryItem[]>(storageKeys.mobilityHistory, []);
+    const storedFeedback = readJson<UserFeedback[]>(storageKeys.feedback, []);
+
+    setProfile(storedProfile);
+    setEquipmentProfile(storedEquipment);
+    setCalibrationScores(storedCalibration);
+    setMobilityScores(storedScores);
+    setHistory(storedHistory);
+    setMobilityHistory(storedMobilityHistory);
+    setFeedback(storedFeedback);
+    setGeneratedWorkout(generateWorkoutPlan({ profile: storedProfile, mobilityScores: storedScores, history: storedHistory, feedback: storedFeedback }));
+    setGeneratedMobility(generateMobilityPlan({
+      profile: storedProfile,
+      mobilityScores: storedScores,
+      mode: mobilityMode,
+      timeAvailable: storedProfile.mobilityMinutes,
+      feedback: storedFeedback,
+      history: storedHistory,
+      mobilityHistory: storedMobilityHistory,
+    }));
 
     async function loadSession() {
       const { data } = await supabase.auth.getSession();
@@ -203,13 +239,23 @@ export default function Page() {
 
       const { data: profileRow } = await supabase.from('profiles').select('*').eq('id', user.id).maybeSingle();
       if (profileRow && typeof profileRow === 'object') {
-        const mappedProfile = mapProfileRow(profileRow as Record<string, unknown>, profile);
+        const mappedProfile = withProfileDefaults(mapProfileRow(profileRow as Record<string, unknown>, storedProfile));
         setProfile(mappedProfile);
         writeJson(storageKeys.profile, mappedProfile);
         const rowEquipment = Array.isArray((profileRow as Record<string, unknown>).equipment_profile)
           ? ((profileRow as Record<string, unknown>).equipment_profile as string[])
           : mappedProfile.equipment;
         setEquipmentProfile(equipmentListToProfile(rowEquipment));
+        setGeneratedWorkout(generateWorkoutPlan({ profile: mappedProfile, mobilityScores: storedScores, history: storedHistory, feedback: storedFeedback }));
+        setGeneratedMobility(generateMobilityPlan({
+          profile: mappedProfile,
+          mobilityScores: storedScores,
+          mode: mobilityMode,
+          timeAvailable: mappedProfile.mobilityMinutes,
+          feedback: storedFeedback,
+          history: storedHistory,
+          mobilityHistory: storedMobilityHistory,
+        }));
       }
     }
 
@@ -287,7 +333,7 @@ export default function Page() {
     writeJson(storageKeys.mobilityScores, nextScores);
     setStatusMessage('Calibration saved. Workout and mobility recommendations now use these scores.');
     setGeneratedWorkout(generateWorkoutPlan({ profile, mobilityScores: nextScores, history, feedback }));
-    setGeneratedMobility(generateMobilityPlan({ profile, mobilityScores: nextScores, mode: mobilityMode, timeAvailable: profile.mobilityMinutes, feedback }));
+    setGeneratedMobility(generateMobilityPlan({ profile, mobilityScores: nextScores, mode: mobilityMode, timeAvailable: profile.mobilityMinutes, feedback, history, mobilityHistory }));
     setActiveTab('home');
 
     if (userId && userId !== 'local-demo') {
@@ -309,7 +355,7 @@ export default function Page() {
   function generateWorkout() {
     const workout = generateWorkoutPlan({ profile, mobilityScores, history, feedback });
     setGeneratedWorkout(workout);
-    setStatusMessage(`${workout.title} generated from calibration, readiness, equipment, and recent history.`);
+    setStatusMessage(`${workout.title} recommended: ${workout.recommendationReason}`);
     setActiveTab('workout');
   }
 
@@ -320,9 +366,11 @@ export default function Page() {
       mode: mobilityMode,
       timeAvailable: profile.mobilityMinutes,
       feedback,
+      history,
+      mobilityHistory,
     });
     setGeneratedMobility(routine);
-    setStatusMessage(`${routine.title} generated from your lowest scores and sport needs.`);
+    setStatusMessage(`${routine.title} recommended: ${routine.recommendationReason}`);
     setActiveTab('mobility');
   }
 
@@ -370,15 +418,44 @@ export default function Page() {
     writeJson(storageKeys.mobilityScores, nextScores);
 
     if (sessionType === 'workout' && generatedWorkout) {
-      const nextHistory = [historyFromWorkout(generatedWorkout, entry), ...history].slice(0, 30);
+      const nextHistory = entry.completed ? [historyFromWorkout(generatedWorkout, entry), ...history].slice(0, 30) : history;
       setHistory(nextHistory);
       writeJson(storageKeys.history, nextHistory);
       await saveWorkoutToSupabase(generatedWorkout, entry);
+      const nextWorkout = generateWorkoutPlan({ profile, mobilityScores: nextScores, history: nextHistory, feedback: nextFeedback });
+      const nextMobility = generateMobilityPlan({
+        profile,
+        mobilityScores: nextScores,
+        mode: 'post_workout',
+        timeAvailable: profile.mobilityMinutes,
+        feedback: nextFeedback,
+        history: nextHistory,
+        mobilityHistory,
+      });
+      setGeneratedWorkout(nextWorkout);
+      setGeneratedMobility(nextMobility);
+      setStatusMessage(entry.completed
+        ? `Workout completed. Next up: ${workoutTypeLabels[nextWorkout.workoutType]}.`
+        : 'Workout feedback saved as partial; the split stays on the same recommendation.');
     } else if (generatedMobility) {
+      const nextMobilityHistory = entry.completed ? [historyFromMobility(generatedMobility, entry), ...mobilityHistory].slice(0, 30) : mobilityHistory;
+      setMobilityHistory(nextMobilityHistory);
+      writeJson(storageKeys.mobilityHistory, nextMobilityHistory);
       await saveMobilityToSupabase(generatedMobility, entry);
+      const nextMobility = generateMobilityPlan({
+        profile,
+        mobilityScores: nextScores,
+        mode: mobilityMode,
+        timeAvailable: profile.mobilityMinutes,
+        feedback: nextFeedback,
+        history,
+        mobilityHistory: nextMobilityHistory,
+      });
+      setGeneratedMobility(nextMobility);
+      setStatusMessage(entry.completed
+        ? `Stretch session completed. Next mobility recommendation: ${nextMobility.title}.`
+        : 'Mobility feedback saved as partial; the routine remains available.');
     }
-
-    setStatusMessage(`${sessionType === 'workout' ? 'Workout' : 'Mobility'} feedback saved. The next recommendation will adjust from it.`);
   }
 
   async function saveWorkoutToSupabase(workout: WorkoutSession, entry: UserFeedback) {
@@ -582,7 +659,7 @@ export default function Page() {
             )}
 
             {activeTab === 'progress' && (
-              <ProgressTab history={history} feedback={feedback} mobilityScores={mobilityScores} />
+              <ProgressTab history={history} mobilityHistory={mobilityHistory} feedback={feedback} mobilityScores={mobilityScores} />
             )}
 
             {activeTab === 'settings' && (
@@ -611,6 +688,11 @@ export default function Page() {
             </Panel>
             <Panel title="Status" eyebrow="Engine">
               <p className="text-sm leading-6 text-zinc-300">{statusMessage}</p>
+            </Panel>
+            <Panel title="Video checks" eyebrow="Examples">
+              <p className="text-sm leading-6 text-zinc-300">
+                {videoIssues.length ? `${videoIssues.length} invalid or placeholder video URL${videoIssues.length === 1 ? '' : 's'} detected.` : 'No invalid or placeholder video URLs detected.'}
+              </p>
             </Panel>
           </aside>
         </section>
@@ -665,13 +747,13 @@ function HomeDashboard({
         <div className="grid gap-3 sm:grid-cols-2">
           <button onClick={generateWorkout} className="rounded-xl border border-orange-400/30 bg-orange-500 px-4 py-4 text-left text-black">
             <Dumbbell className="h-5 w-5" />
-            <span className="mt-3 block text-lg font-black">Generate workout</span>
-            <span className="mt-1 block text-sm font-semibold text-black/70">{profile.workoutLength} min, {profile.equipment.slice(0, 3).join(', ')}</span>
+            <span className="mt-3 block text-lg font-black">Refresh workout recommendation</span>
+            <span className="mt-1 block text-sm font-semibold text-black/70">{planLabels[profile.trainingPlan]}, {profile.workoutLength} min</span>
           </button>
           <button onClick={generateMobility} className="rounded-xl border border-emerald-300/30 bg-emerald-400 px-4 py-4 text-left text-black">
             <Activity className="h-5 w-5" />
-            <span className="mt-3 block text-lg font-black">Generate mobility</span>
-            <span className="mt-1 block text-sm font-semibold text-black/70">{profile.mobilityMinutes} min, lowest areas first</span>
+            <span className="mt-3 block text-lg font-black">Refresh mobility recommendation</span>
+            <span className="mt-1 block text-sm font-semibold text-black/70">{profile.mobilityMinutes} min, history-aware</span>
           </button>
         </div>
       </Panel>
@@ -679,14 +761,20 @@ function HomeDashboard({
       <section className="grid gap-4 lg:grid-cols-2">
         <Panel title="Next workout" eyebrow={generatedWorkout ? generatedWorkout.focus : 'Not generated'}>
           {generatedWorkout ? (
-            <CompactWorkout workout={generatedWorkout} />
+            <>
+              <p className="mb-3 text-sm leading-6 text-zinc-300">{generatedWorkout.recommendationReason}</p>
+              <CompactWorkout workout={generatedWorkout} />
+            </>
           ) : (
             <EmptyState text="Run calibration or generate from defaults." action="Open Workout" onClick={() => setActiveTab('workout')} />
           )}
         </Panel>
         <Panel title="Next mobility" eyebrow={generatedMobility ? generatedMobility.scoreSummary : 'Not generated'}>
           {generatedMobility ? (
-            <CompactMobility routine={generatedMobility} />
+            <>
+              <p className="mb-3 text-sm leading-6 text-zinc-300">{generatedMobility.recommendationReason}</p>
+              <CompactMobility routine={generatedMobility} />
+            </>
           ) : (
             <EmptyState text="Mobility uses your lowest scores and session mode." action="Open Mobility" onClick={() => setActiveTab('mobility')} />
           )}
@@ -729,6 +817,7 @@ function WorkoutTab({
     <>
       <Panel title="Workout builder" eyebrow="Personalized">
         <div className="grid gap-3 sm:grid-cols-2">
+          <SelectField label="Plan" value={profile.trainingPlan} options={planOptions} onChange={(value) => updateProfile({ trainingPlan: value as TrainingPlanType })} />
           <SelectField label="Goal" value={profile.goal} options={goalOptions} onChange={(value) => updateProfile({ goal: value as TrainingGoal })} />
           <SelectField
             label="Experience"
@@ -767,6 +856,9 @@ function WorkoutTab({
 
       {generatedWorkout && (
         <Panel title={generatedWorkout.title} eyebrow={generatedWorkout.readinessAdjustment}>
+          <div className="mb-4 rounded-xl border border-orange-300/20 bg-orange-300/10 p-3 text-sm leading-6 text-orange-100">
+            <span className="font-black">{workoutTypeLabels[generatedWorkout.workoutType]}</span> - {generatedWorkout.recommendationReason}
+          </div>
           <div className="rounded-xl border border-amber-300/20 bg-amber-300/10 p-3 text-sm text-amber-100">
             <AlertTriangle className="mr-2 inline h-4 w-4" />
             {generatedWorkout.safetyNote}
@@ -792,6 +884,7 @@ function WorkoutTab({
           setDraft={setFeedbackDraft}
           togglePain={togglePain}
           logFeedback={logFeedback}
+          submitLabel="Complete Workout"
         />
       )}
     </>
@@ -855,6 +948,9 @@ function MobilityTab({
 
       {generatedMobility && (
         <Panel title={generatedMobility.title} eyebrow={generatedMobility.scoreSummary}>
+          <div className="mb-4 rounded-xl border border-emerald-300/20 bg-emerald-300/10 p-3 text-sm leading-6 text-emerald-100">
+            {generatedMobility.recommendationReason} {generatedMobility.progressionNote}
+          </div>
           <div className="mb-4 flex flex-wrap gap-2">
             {generatedMobility.targetAreas.map((area) => <Tag key={area}>{formatArea(area)}</Tag>)}
           </div>
@@ -871,6 +967,7 @@ function MobilityTab({
           setDraft={setFeedbackDraft}
           togglePain={togglePain}
           logFeedback={logFeedback}
+          submitLabel="Complete Stretch Session"
         />
       )}
     </>
@@ -896,6 +993,7 @@ function CalibrationTab({
     <>
       <Panel title="Profile setup" eyebrow="Step 1">
         <div className="grid gap-3 sm:grid-cols-2">
+          <SelectField label="Training plan" value={profile.trainingPlan} options={planOptions} onChange={(value) => updateProfile({ trainingPlan: value as TrainingPlanType })} />
           <SelectField label="Main goal" value={profile.goal} options={goalOptions} onChange={(value) => updateProfile({ goal: value as TrainingGoal })} />
           <SelectField
             label="Experience"
@@ -1020,7 +1118,17 @@ function StretchLibraryTab({
   );
 }
 
-function ProgressTab({ history, feedback, mobilityScores }: { history: TrainingHistoryItem[]; feedback: UserFeedback[]; mobilityScores: MobilityScore[] }) {
+function ProgressTab({
+  history,
+  mobilityHistory,
+  feedback,
+  mobilityScores,
+}: {
+  history: TrainingHistoryItem[];
+  mobilityHistory: MobilityHistoryItem[];
+  feedback: UserFeedback[];
+  mobilityScores: MobilityScore[];
+}) {
   const patternCounts = history.flatMap((item) => item.movementPatterns).reduce<Record<string, number>>((acc, pattern) => {
     acc[pattern] = (acc[pattern] ?? 0) + 1;
     return acc;
@@ -1033,6 +1141,26 @@ function ProgressTab({ history, feedback, mobilityScores }: { history: TrainingH
           {Object.entries(patternCounts).length ? Object.entries(patternCounts).map(([pattern, count]) => (
             <Metric key={pattern} label={pattern} value={String(count)} tone="green" />
           )) : <p className="text-sm text-zinc-400">Complete a session to start building history.</p>}
+        </div>
+      </Panel>
+      <Panel title="Workout history" eyebrow={`${history.length} completed`}>
+        <div className="flex flex-col gap-2">
+          {history.slice(0, 8).map((item) => (
+            <div key={`${item.sessionTitle}-${item.completedAt}`} className="rounded-xl bg-black/25 px-4 py-3 text-sm text-zinc-300">
+              <span className="font-black text-white">{item.sessionTitle ?? workoutTypeLabels[item.workoutType ?? 'full_body']}</span> - {item.workoutType ? workoutTypeLabels[item.workoutType] : 'Workout'} - RPE {item.rpe}
+            </div>
+          ))}
+          {!history.length && <p className="text-sm text-zinc-400">No completed workouts yet.</p>}
+        </div>
+      </Panel>
+      <Panel title="Stretch history" eyebrow={`${mobilityHistory.length} completed`}>
+        <div className="flex flex-col gap-2">
+          {mobilityHistory.slice(0, 8).map((item) => (
+            <div key={`${item.sessionTitle}-${item.completedAt}`} className="rounded-xl bg-black/25 px-4 py-3 text-sm text-zinc-300">
+              <span className="font-black text-white">{item.sessionTitle}</span> - {item.durationMinutes} min - {item.targetAreas.map(formatArea).join(', ')}
+            </div>
+          ))}
+          {!mobilityHistory.length && <p className="text-sm text-zinc-400">No completed stretch sessions yet.</p>}
         </div>
       </Panel>
       <Panel title="Mobility trend" eyebrow="Scores">
@@ -1073,6 +1201,7 @@ function SettingsTab({
     <>
       <Panel title="Profile" eyebrow={userEmail ?? 'Local athlete'}>
         <div className="grid gap-3 sm:grid-cols-2">
+          <SelectField label="Training plan" value={profile.trainingPlan} options={planOptions} onChange={(value) => updateProfile({ trainingPlan: value as TrainingPlanType })} />
           <SelectField label="Goal" value={profile.goal} options={goalOptions} onChange={(value) => updateProfile({ goal: value as TrainingGoal })} />
           <SelectField
             label="Experience"
@@ -1119,6 +1248,7 @@ function ExerciseCard({ exercise, onSwap }: { exercise: WorkoutExercise; onSwap:
           <p className="mt-1 text-sm text-zinc-300">
             {exercise.sets ? `${exercise.sets} sets - ${exercise.reps}` : `${exercise.timeSeconds}s`} - rest {exercise.restSeconds}s - {exercise.rpeTarget}
           </p>
+          <p className="mt-2 text-sm leading-6 text-zinc-400">{exercise.item.description}</p>
         </div>
         <DifficultyTag value={exercise.item.difficulty} />
       </div>
@@ -1128,7 +1258,9 @@ function ExerciseCard({ exercise, onSwap }: { exercise: WorkoutExercise; onSwap:
       </div>
       <p className="mt-3 text-sm leading-6 text-zinc-300">{exercise.reason}</p>
       <p className="mt-2 text-sm leading-6 text-zinc-400">{exercise.progression}</p>
+      <InstructionList items={exercise.item.coachingCues} />
       <MovementDetails cues={exercise.item.coachingCues} mistakes={exercise.item.commonMistakes} />
+      <VideoMeta item={exercise.item} />
       <div className="mt-4 grid grid-cols-2 gap-2">
         <VideoButton item={exercise.item} />
         <button onClick={onSwap} className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/10 text-sm font-black text-zinc-100">
@@ -1148,6 +1280,7 @@ function StretchCard({ step }: { step: MobilitySession['steps'][number] }) {
           <p className="text-xs font-black uppercase tracking-[0.18em] text-emerald-300">{step.phase} - {step.seconds}s</p>
           <h3 className="mt-1 text-lg font-black">{step.item.name}</h3>
           <p className="mt-1 text-sm text-zinc-300">{step.reason}</p>
+          <p className="mt-2 text-sm leading-6 text-zinc-400">{step.item.description}</p>
         </div>
         <DifficultyTag value={step.item.difficulty} />
       </div>
@@ -1155,7 +1288,9 @@ function StretchCard({ step }: { step: MobilitySession['steps'][number] }) {
         {step.item.bodyAreas.map((area) => <Tag key={area}>{formatArea(area)}</Tag>)}
         {step.item.equipment.map((item) => <Tag key={item}>{item}</Tag>)}
       </div>
+      <InstructionList items={step.item.coachingCues} />
       <MovementDetails cues={step.item.coachingCues} mistakes={step.item.commonMistakes} />
+      <VideoMeta item={step.item} />
       <div className="mt-4">
         <VideoButton item={step.item} />
       </div>
@@ -1170,6 +1305,7 @@ function ExerciseLibraryCard({ item }: { item: ExerciseLibraryItem }) {
         <div>
           <p className="text-xs font-black uppercase tracking-[0.18em] text-orange-300">{item.movementPattern}</p>
           <h3 className="mt-1 text-lg font-black">{item.name}</h3>
+          <p className="mt-2 text-sm leading-6 text-zinc-400">{item.description}</p>
         </div>
         <DifficultyTag value={item.difficulty} />
       </div>
@@ -1177,7 +1313,9 @@ function ExerciseLibraryCard({ item }: { item: ExerciseLibraryItem }) {
         {item.equipment.slice(0, 4).map((equipment) => <Tag key={equipment}>{equipment}</Tag>)}
         {item.musclesWorked.slice(0, 4).map((muscle) => <Tag key={muscle}>{muscle}</Tag>)}
       </div>
+      <InstructionList items={item.coachingCues} />
       <MovementDetails cues={item.coachingCues} mistakes={item.commonMistakes} />
+      <VideoMeta item={item} />
       <div className="mt-4">
         <VideoButton item={item} />
       </div>
@@ -1192,6 +1330,7 @@ function StretchLibraryCard({ item }: { item: StretchLibraryItem }) {
         <div>
           <p className="text-xs font-black uppercase tracking-[0.18em] text-emerald-300">{item.phase}</p>
           <h3 className="mt-1 text-lg font-black">{item.name}</h3>
+          <p className="mt-2 text-sm leading-6 text-zinc-400">{item.description}</p>
         </div>
         <DifficultyTag value={item.difficulty} />
       </div>
@@ -1199,7 +1338,9 @@ function StretchLibraryCard({ item }: { item: StretchLibraryItem }) {
         {item.bodyAreas.map((area) => <Tag key={area}>{formatArea(area)}</Tag>)}
         {item.equipment.map((equipment) => <Tag key={equipment}>{equipment}</Tag>)}
       </div>
+      <InstructionList items={item.coachingCues} />
       <MovementDetails cues={item.coachingCues} mistakes={item.commonMistakes} />
+      <VideoMeta item={item} />
       <div className="mt-4">
         <VideoButton item={item} />
       </div>
@@ -1213,12 +1354,14 @@ function FeedbackPanel({
   setDraft,
   togglePain,
   logFeedback,
+  submitLabel,
 }: {
   title: string;
   draft: FeedbackDraft;
   setDraft: (next: FeedbackDraft | ((old: FeedbackDraft) => FeedbackDraft)) => void;
   togglePain: (area: MobilityArea) => void;
   logFeedback: () => void;
+  submitLabel: string;
 }) {
   return (
     <Panel title={title} eyebrow="Adjust next recommendation">
@@ -1247,7 +1390,7 @@ function FeedbackPanel({
       {draft.pain && <PainPicker selected={draft.painAreas} togglePain={togglePain} />}
       <button onClick={logFeedback} className="mt-5 inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-white px-4 font-black text-black">
         <CheckCircle2 className="h-5 w-5" />
-        Save feedback
+        {submitLabel}
       </button>
     </Panel>
   );
@@ -1430,6 +1573,26 @@ function ScoreRow({ score }: { score: MobilityScore }) {
   );
 }
 
+function InstructionList({ items }: { items: string[] }) {
+  return (
+    <div className="mt-3 rounded-xl bg-white/5 p-3">
+      <p className="text-xs font-black uppercase tracking-[0.16em] text-zinc-400">Step-by-step instructions</p>
+      <ol className="mt-2 list-decimal space-y-1 pl-5 text-sm leading-6 text-zinc-300">
+        {items.map((item) => <li key={item}>{item}</li>)}
+      </ol>
+    </div>
+  );
+}
+
+function VideoMeta({ item }: { item: { videoUrl: string; videoAvailable: boolean } }) {
+  return (
+    <div className="mt-3 rounded-xl bg-white/5 p-3 font-mono text-[11px] leading-5 text-zinc-400">
+      <p>videoAvailable: {item.videoAvailable ? 'true' : 'false'}</p>
+      <p className="break-words">videoUrl: {item.videoAvailable ? item.videoUrl : 'none'}</p>
+    </div>
+  );
+}
+
 function MovementDetails({ cues, mistakes }: { cues: string[]; mistakes: string[] }) {
   return (
     <div className="mt-3 grid gap-2 sm:grid-cols-2">
@@ -1445,12 +1608,56 @@ function MovementDetails({ cues, mistakes }: { cues: string[]; mistakes: string[
   );
 }
 
-function VideoButton({ item }: { item: { videoUrl: string; videoType: string } }) {
+function VideoButton({ item }: { item: { name: string; videoUrl: string; videoAvailable: boolean } }) {
+  const [open, setOpen] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const validation = validateVideoUrl(item.videoUrl, item.videoAvailable);
+  const embedUrl = item.videoAvailable && validation.status === 'valid' ? getVideoEmbedUrl(item.videoUrl) : '';
+
+  if (!embedUrl) {
+    return (
+      <div className="inline-flex min-h-11 w-full items-center justify-center rounded-xl border border-white/10 bg-white/5 px-3 text-center text-sm font-black text-zinc-400">
+        Video example coming soon
+      </div>
+    );
+  }
+
   return (
-    <a href={item.videoUrl} target="_blank" rel="noreferrer" className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-white px-3 text-sm font-black text-black">
-      <Video className="h-4 w-4" />
-      Watch example
-    </a>
+    <>
+      <button onClick={() => { setFailed(false); setOpen(true); }} className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-white px-3 text-sm font-black text-black">
+        <Video className="h-4 w-4" />
+        Watch example
+      </button>
+      {open && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 px-4 py-6">
+          <section className="w-full max-w-3xl overflow-hidden rounded-xl border border-white/10 bg-[#080a0f] shadow-2xl">
+            <div className="flex items-center justify-between gap-3 border-b border-white/10 px-4 py-3">
+              <h2 className="text-base font-black">{item.name}</h2>
+              <button onClick={() => setOpen(false)} className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-white/10 text-white" aria-label="Close video">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="aspect-video bg-black">
+              {!failed ? (
+                <iframe
+                  title={`${item.name} video example`}
+                  src={embedUrl}
+                  className="h-full w-full"
+                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                  allowFullScreen
+                  onError={() => setFailed(true)}
+                />
+              ) : (
+                <div className="flex h-full items-center justify-center px-4 text-center text-sm font-bold text-zinc-300">
+                  Video example coming soon
+                </div>
+              )}
+            </div>
+            <p className="px-4 py-3 text-sm text-zinc-400">{validation.message}</p>
+          </section>
+        </div>
+      )}
+    </>
   );
 }
 
@@ -1478,6 +1685,8 @@ function EmptyState({ text, action, onClick }: { text: string; action: string; o
 function historyFromWorkout(workout: WorkoutSession, entry: UserFeedback): TrainingHistoryItem {
   return {
     completedAt: entry.createdAt,
+    sessionTitle: workout.title,
+    workoutType: workout.workoutType,
     muscles: Array.from(new Set(workout.exercises.flatMap((exercise) => exercise.item.musclesWorked.map((muscle) => muscle.toLowerCase())))),
     movementPatterns: Array.from(new Set(workout.exercises.map((exercise) => exercise.item.movementPattern))),
     rpe: entry.rpe,
@@ -1485,12 +1694,37 @@ function historyFromWorkout(workout: WorkoutSession, entry: UserFeedback): Train
   };
 }
 
+function historyFromMobility(routine: MobilitySession, entry: UserFeedback): MobilityHistoryItem {
+  return {
+    completedAt: entry.createdAt,
+    sessionTitle: routine.title,
+    targetAreas: routine.targetAreas,
+    drillIds: routine.steps.map((step) => step.item.id),
+    durationMinutes: routine.durationMinutes,
+    rpe: entry.rpe,
+    pain: entry.pain,
+  };
+}
+
+function withProfileDefaults(profile: UserProfile): UserProfile {
+  return {
+    ...defaultProfile,
+    ...profile,
+    trainingPlan: profile.trainingPlan ?? defaultProfile.trainingPlan,
+    equipment: profile.equipment?.length ? profile.equipment : defaultProfile.equipment,
+    combatSchedule: { ...defaultProfile.combatSchedule, ...(profile.combatSchedule ?? {}) },
+    painAreas: profile.painAreas ?? [],
+  };
+}
+
 function mapProfileRow(row: Record<string, unknown>, fallback: UserProfile): UserProfile {
   const goalText = String(row.primary_goal ?? row.goal ?? '').toLowerCase();
   const experienceText = String(row.experience_level ?? row.training_experience ?? fallback.experienceLevel).toLowerCase();
+  const planText = String(row.training_plan ?? row.split_plan ?? fallback.trainingPlan).toLowerCase();
   return {
     ...fallback,
     goal: goalText.includes('strength') ? 'strength' : goalText.includes('muscle') ? 'muscle' : goalText.includes('fat') ? 'fat_loss' : goalText.includes('endurance') ? 'endurance' : goalText.includes('mobility') ? 'mobility' : goalText.includes('mma') || goalText.includes('bjj') ? 'mma_bjj' : fallback.goal,
+    trainingPlan: planText.includes('upper') ? 'upper_lower' : planText.includes('full') ? 'full_body' : planText.includes('mobility') ? 'mobility_only' : planText.includes('mma') || planText.includes('bjj') ? 'mma_bjj_athletic' : 'push_pull_legs',
     experienceLevel: experienceText.includes('beginner') ? 'beginner' : experienceText.includes('advanced') ? 'advanced' : experienceText.includes('competitive') ? 'competitive' : 'intermediate',
     equipment: Array.isArray(row.equipment_profile) ? row.equipment_profile as string[] : fallback.equipment,
     painAreas: Array.isArray(row.limitations) ? mapLimitationsToPain(row.limitations as string[]) : fallback.painAreas,

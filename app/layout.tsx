@@ -8,6 +8,9 @@ export const metadata: Metadata = {
   title: 'ForgeFit',
   description: 'Adaptive strength, conditioning, and mobility training.',
   manifest: '/manifest.json',
+  icons: {
+    icon: [{ url: 'data:,' }],
+  },
 };
 
 export const viewport: Viewport = {

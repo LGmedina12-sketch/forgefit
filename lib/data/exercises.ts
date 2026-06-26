@@ -1,19 +1,32 @@
-import type { ExerciseLibraryItem, TrainingGoal } from '@/lib/training/types';
+import type { ExerciseLibraryItem, MediaFields, TrainingGoal, VideoType } from '@/lib/training/types';
 
-type ExerciseSeed = Omit<ExerciseLibraryItem, 'videoUrl' | 'thumbnailUrl' | 'videoType'>;
+type ExerciseSeed = Omit<ExerciseLibraryItem, keyof MediaFields | 'description'> & {
+  description?: string;
+  videoUrl?: string;
+  thumbnailUrl?: string;
+  videoType?: VideoType;
+};
 
-const placeholderVideo = (name: string) => ({
-  videoUrl: `https://example.com/forgefit/videos/${encodeURIComponent(name.toLowerCase().replaceAll(' ', '-'))}`,
-  thumbnailUrl: `https://placehold.co/640x360/10131a/f97316?text=${encodeURIComponent(name)}`,
-  videoType: 'external' as const,
-});
+const exerciseVideos: Record<string, string> = {
+  'push-up': 'https://www.youtube.com/watch?v=WDIpL0pjun0',
+  'band-pull-apart': 'https://www.youtube.com/watch?v=bYsgk9SrJ48',
+  'bodyweight-squat': 'https://www.youtube.com/watch?v=DlS-GAF8Edg',
+  'goblet-squat': 'https://www.youtube.com/watch?v=DlS-GAF8Edg',
+};
 
 const baseGoals: TrainingGoal[] = ['strength', 'muscle', 'fat_loss', 'athleticism'];
 
 function exercise(item: ExerciseSeed): ExerciseLibraryItem {
+  const videoUrl = item.videoUrl ?? exerciseVideos[item.id] ?? '';
+  const videoType = item.videoType ?? (videoUrl.includes('youtube.com') || videoUrl.includes('youtu.be') ? 'youtube' : 'external');
+
   return {
-    ...placeholderVideo(item.name),
     ...item,
+    description: item.description ?? `${item.category} pattern for ${item.musclesWorked.slice(0, 3).join(', ')} using ${item.equipment.slice(0, 2).join(' or ')}.`,
+    videoUrl,
+    thumbnailUrl: item.thumbnailUrl ?? '',
+    videoType,
+    videoAvailable: Boolean(videoUrl),
   };
 }
 

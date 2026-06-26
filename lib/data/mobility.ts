@@ -1,24 +1,36 @@
-import type { StretchLibraryItem } from '@/lib/training/types';
+import type { MediaFields, StretchLibraryItem, VideoType } from '@/lib/training/types';
 
-type StretchSeed = Omit<StretchLibraryItem, 'videoUrl' | 'thumbnailUrl' | 'videoType'>;
+type StretchSeed = Omit<StretchLibraryItem, keyof MediaFields | 'description'> & {
+  description?: string;
+  videoUrl?: string;
+  thumbnailUrl?: string;
+  videoType?: VideoType;
+};
 
-const placeholderVideo = (name: string) => ({
-  videoUrl: `https://example.com/forgefit/mobility/${encodeURIComponent(name.toLowerCase().replaceAll(' ', '-'))}`,
-  thumbnailUrl: `https://placehold.co/640x360/10131a/22c55e?text=${encodeURIComponent(name)}`,
-  videoType: 'external' as const,
-});
+const stretchVideos: Record<string, string> = {
+  'worlds-greatest-stretch': 'https://www.youtube.com/watch?v=-CiWQ2IvY34',
+  'couch-stretch': 'https://www.youtube.com/watch?v=WPWNaOzZGPo',
+  'ninety-ninety-switches': 'https://www.youtube.com/watch?v=t4Zz6-aG8Iw',
+};
 
 function stretch(item: StretchSeed): StretchLibraryItem {
+  const videoUrl = item.videoUrl ?? stretchVideos[item.id] ?? '';
+  const videoType = item.videoType ?? (videoUrl.includes('youtube.com') || videoUrl.includes('youtu.be') ? 'youtube' : 'external');
+
   return {
-    ...placeholderVideo(item.name),
     ...item,
+    description: item.description ?? `${item.category} for ${item.bodyAreas.slice(0, 3).map((area) => area.replaceAll('_', ' ')).join(', ')}.`,
+    videoUrl,
+    thumbnailUrl: item.thumbnailUrl ?? '',
+    videoType,
+    videoAvailable: Boolean(videoUrl),
   };
 }
 
 export const stretchLibrary: StretchLibraryItem[] = [
   stretch({
     id: 'worlds-greatest-stretch',
-    name: 'Worlds Greatest Stretch',
+    name: "World's Greatest Stretch",
     category: 'dynamic mobility',
     bodyAreas: ['hips', 'hamstrings', 'thoracic_spine', 'rotation'],
     phase: 'dynamic',

@@ -10,6 +10,8 @@ export type TrainingGoal =
 export type ExperienceLevel = 'beginner' | 'intermediate' | 'advanced' | 'competitive';
 export type Difficulty = 'beginner' | 'intermediate' | 'advanced';
 export type VideoType = 'youtube' | 'local' | 'external';
+export type TrainingPlanType = 'push_pull_legs' | 'upper_lower' | 'full_body' | 'mma_bjj_athletic' | 'mobility_only';
+export type WorkoutSplitType = 'push' | 'pull' | 'legs' | 'upper' | 'lower' | 'full_body' | 'mma_bjj' | 'mobility_only' | 'recovery' | 'rest';
 
 export type MovementPattern =
   | 'push'
@@ -73,6 +75,7 @@ export type UserProfile = {
   id?: string;
   displayName?: string;
   goal: TrainingGoal;
+  trainingPlan: TrainingPlanType;
   equipment: string[];
   trainingDaysPerWeek: number;
   combatSchedule: CombatSchedule;
@@ -119,11 +122,13 @@ export type MediaFields = {
   videoUrl: string;
   thumbnailUrl: string;
   videoType: VideoType;
+  videoAvailable: boolean;
 };
 
 export type ExerciseLibraryItem = MediaFields & {
   id: string;
   name: string;
+  description: string;
   category: string;
   movementPattern: MovementPattern;
   coachingCues: string[];
@@ -140,6 +145,7 @@ export type ExerciseLibraryItem = MediaFields & {
 export type StretchLibraryItem = MediaFields & {
   id: string;
   name: string;
+  description: string;
   category: string;
   bodyAreas: MobilityArea[];
   phase: MobilityPhase;
@@ -167,8 +173,12 @@ export type WorkoutSession = {
   id: string;
   title: string;
   focus: string;
+  workoutType: WorkoutSplitType;
   durationMinutes: number;
   readinessAdjustment: string;
+  recommendationReason: string;
+  missedDays: number;
+  planLabel: string;
   safetyNote: string;
   patternBalance: Record<MovementPattern, number>;
   exercises: WorkoutExercise[];
@@ -190,6 +200,8 @@ export type MobilitySession = {
   targetAreas: MobilityArea[];
   scoreSummary: string;
   steps: MobilitySessionStep[];
+  recommendationReason: string;
+  progressionNote: string;
 };
 
 export type UserFeedback = {
@@ -206,8 +218,20 @@ export type UserFeedback = {
 
 export type TrainingHistoryItem = {
   completedAt: string;
+  sessionTitle?: string;
+  workoutType?: WorkoutSplitType;
   muscles: string[];
   movementPatterns: MovementPattern[];
+  rpe: number;
+  pain: boolean;
+};
+
+export type MobilityHistoryItem = {
+  completedAt: string;
+  sessionTitle: string;
+  targetAreas: MobilityArea[];
+  drillIds: string[];
+  durationMinutes: number;
   rpe: number;
   pain: boolean;
 };
