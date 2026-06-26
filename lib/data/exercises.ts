@@ -1,10 +1,13 @@
 import type { ExerciseLibraryItem, MediaFields, TrainingGoal, VideoType } from '@/lib/training/types';
 
-type ExerciseSeed = Omit<ExerciseLibraryItem, keyof MediaFields | 'description'> & {
+type ExerciseSeed = Omit<ExerciseLibraryItem, keyof MediaFields | 'description' | 'easierAlternative' | 'harderAlternative' | 'injuryWarnings'> & {
   description?: string;
   videoUrl?: string;
   thumbnailUrl?: string;
   videoType?: VideoType;
+  easierAlternative?: string;
+  harderAlternative?: string;
+  injuryWarnings?: string[];
 };
 
 const exerciseVideos: Record<string, string> = {
@@ -27,10 +30,13 @@ function exercise(item: ExerciseSeed): ExerciseLibraryItem {
     thumbnailUrl: item.thumbnailUrl ?? '',
     videoType,
     videoAvailable: Boolean(videoUrl),
+    easierAlternative: item.easierAlternative ?? item.substitutions[0] ?? '',
+    harderAlternative: item.harderAlternative ?? item.substitutions[1] ?? '',
+    injuryWarnings: item.injuryWarnings ?? (item.avoidWithPain?.length ? [`Avoid or modify with ${item.avoidWithPain.join(', ')} pain.`] : []),
   };
 }
 
-export const exerciseLibrary: ExerciseLibraryItem[] = [
+const baseExerciseLibrary: ExerciseLibraryItem[] = [
   exercise({
     id: 'push-up',
     name: 'Push-Up',
@@ -428,6 +434,110 @@ export const exerciseLibrary: ExerciseLibraryItem[] = [
     substitutions: ['jump-rope', 'battle-rope-waves', 'incline-treadmill-walk'],
   }),
 ];
+
+type QuickExercise = {
+  id: string;
+  name: string;
+  pattern: ExerciseLibraryItem['movementPattern'];
+  muscles: string[];
+  equipment?: string[];
+  difficulty?: ExerciseLibraryItem['difficulty'];
+  category?: string;
+  goals?: TrainingGoal[];
+  sport?: string[];
+  avoid?: ExerciseLibraryItem['avoidWithPain'];
+  easier?: string;
+  harder?: string;
+};
+
+function quickExercise(seed: QuickExercise): ExerciseLibraryItem {
+  const equipment = seed.equipment ?? ['bodyweight'];
+  const substitutions = [seed.easier, seed.harder].filter(Boolean) as string[];
+  return exercise({
+    id: seed.id,
+    name: seed.name,
+    category: seed.category ?? (seed.pattern === 'conditioning' ? 'conditioning' : seed.pattern === 'power' ? 'athletic power' : 'strength'),
+    movementPattern: seed.pattern,
+    coachingCues: [`Set a stable ${seed.pattern} position`, 'Move through a controlled pain-free range', 'Stop the set when form changes'],
+    commonMistakes: ['Rushing the movement', 'Losing a braced position', 'Using a variation that is too difficult'],
+    musclesWorked: seed.muscles,
+    equipment,
+    difficulty: seed.difficulty ?? 'beginner',
+    goalTags: seed.goals ?? baseGoals,
+    sportTags: seed.sport ?? [],
+    avoidWithPain: seed.avoid,
+    substitutions,
+    easierAlternative: seed.easier ?? '',
+    harderAlternative: seed.harder ?? '',
+  });
+}
+
+const requestedExerciseLibrary: ExerciseLibraryItem[] = [
+  quickExercise({ id: 'decline-push-up', name: 'Decline Push-Up', pattern: 'push', muscles: ['chest', 'triceps', 'shoulders', 'core'], difficulty: 'intermediate', easier: 'push-up', harder: 'explosive-push-up', avoid: ['shoulders', 'wrists'] }),
+  quickExercise({ id: 'diamond-push-up', name: 'Diamond Push-Up', pattern: 'push', muscles: ['triceps', 'chest', 'shoulders'], difficulty: 'intermediate', easier: 'push-up', harder: 'decline-push-up', avoid: ['wrists', 'elbows'] }),
+  quickExercise({ id: 'explosive-push-up', name: 'Explosive Push-Up', pattern: 'power', muscles: ['chest', 'triceps', 'shoulders', 'core'], difficulty: 'advanced', goals: ['athleticism', 'mma_bjj', 'strength'], sport: ['mma', 'bjj', 'wrestling'], easier: 'push-up', avoid: ['shoulders', 'wrists'] }),
+  quickExercise({ id: 'dumbbell-bench-press', name: 'Dumbbell Bench Press', pattern: 'push', muscles: ['chest', 'triceps', 'shoulders'], equipment: ['dumbbell', 'bench'], difficulty: 'intermediate', easier: 'dumbbell-floor-press', harder: 'dumbbell-bench-press', avoid: ['shoulders'] }),
+  quickExercise({ id: 'dumbbell-floor-press', name: 'Dumbbell Floor Press', pattern: 'push', muscles: ['chest', 'triceps', 'shoulders'], equipment: ['dumbbell'], easier: 'incline-push-up', harder: 'dumbbell-bench-press', avoid: ['shoulders'] }),
+  quickExercise({ id: 'pike-push-up', name: 'Pike Push-Up', pattern: 'push', muscles: ['shoulders', 'triceps', 'core'], difficulty: 'intermediate', easier: 'incline-push-up', harder: 'dumbbell-shoulder-press', avoid: ['shoulders', 'wrists'] }),
+  quickExercise({ id: 'dips', name: 'Dips', pattern: 'push', muscles: ['triceps', 'chest', 'shoulders'], equipment: ['dip bars'], difficulty: 'advanced', easier: 'diamond-push-up', harder: 'dips', avoid: ['shoulders', 'elbows'] }),
+  quickExercise({ id: 'tricep-extension', name: 'Tricep Extension', pattern: 'push', muscles: ['triceps'], equipment: ['dumbbell', 'resistance band', 'cable'], easier: 'diamond-push-up', harder: 'dips', avoid: ['elbows', 'shoulders'] }),
+  quickExercise({ id: 'lateral-raise', name: 'Lateral Raise', pattern: 'push', muscles: ['side delts', 'shoulders'], equipment: ['dumbbell', 'resistance band', 'cable'], easier: 'band-pull-apart', harder: 'dumbbell-shoulder-press', avoid: ['shoulders'] }),
+  quickExercise({ id: 'front-raise', name: 'Front Raise', pattern: 'push', muscles: ['front delts', 'shoulders'], equipment: ['dumbbell', 'resistance band'], easier: 'incline-push-up', harder: 'dumbbell-shoulder-press', avoid: ['shoulders'] }),
+  quickExercise({ id: 'medicine-ball-chest-pass', name: 'Medicine Ball Chest Pass', pattern: 'power', muscles: ['chest', 'triceps', 'shoulders'], equipment: ['medicine ball', 'wall'], difficulty: 'intermediate', goals: ['athleticism', 'mma_bjj', 'strength'], sport: ['mma', 'wrestling'], easier: 'push-up', harder: 'explosive-push-up', avoid: ['shoulders'] }),
+  quickExercise({ id: 'chin-up', name: 'Chin-Up', pattern: 'pull', muscles: ['lats', 'biceps', 'upper back'], equipment: ['pull-up bar'], difficulty: 'advanced', easier: 'assisted-pull-up', harder: 'pull-up', avoid: ['shoulders', 'elbows'] }),
+  quickExercise({ id: 'assisted-pull-up', name: 'Assisted Pull-Up', pattern: 'pull', muscles: ['lats', 'biceps', 'upper back'], equipment: ['pull-up bar', 'resistance band'], easier: 'band-row', harder: 'pull-up', avoid: ['shoulders', 'elbows'] }),
+  quickExercise({ id: 'band-row', name: 'Band Row', pattern: 'pull', muscles: ['upper back', 'lats', 'biceps'], equipment: ['resistance band'], easier: 'towel-row', harder: 'dumbbell-row' }),
+  quickExercise({ id: 'face-pull', name: 'Face Pull', pattern: 'pull', muscles: ['rear delts', 'upper back', 'rotator cuff'], equipment: ['resistance band', 'cable'], easier: 'band-pull-apart', harder: 'rear-delt-fly', avoid: ['shoulders'] }),
+  quickExercise({ id: 'rear-delt-fly', name: 'Rear Delt Fly', pattern: 'pull', muscles: ['rear delts', 'upper back'], equipment: ['dumbbell', 'resistance band'], easier: 'band-pull-apart', harder: 'face-pull', avoid: ['shoulders'] }),
+  quickExercise({ id: 'hammer-curl', name: 'Hammer Curl', pattern: 'pull', muscles: ['biceps', 'forearms'], equipment: ['dumbbell', 'resistance band'], easier: 'bicep-curl', harder: 'chin-up', avoid: ['elbows'] }),
+  quickExercise({ id: 'bicep-curl', name: 'Bicep Curl', pattern: 'pull', muscles: ['biceps'], equipment: ['dumbbell', 'resistance band', 'cable'], easier: 'band-row', harder: 'hammer-curl', avoid: ['elbows'] }),
+  quickExercise({ id: 'dead-hang', name: 'Dead Hang', pattern: 'pull', muscles: ['forearms', 'lats', 'shoulders'], equipment: ['pull-up bar'], easier: 'scapular-pull-up', harder: 'pull-up', avoid: ['shoulders', 'elbows'] }),
+  quickExercise({ id: 'scapular-pull-up', name: 'Scapular Pull-Up', pattern: 'pull', muscles: ['lower traps', 'lats', 'shoulders'], equipment: ['pull-up bar'], easier: 'band-pull-apart', harder: 'assisted-pull-up', avoid: ['shoulders'] }),
+  quickExercise({ id: 'towel-row', name: 'Towel Row', pattern: 'pull', muscles: ['upper back', 'biceps', 'forearms'], equipment: ['towel', 'bodyweight'], easier: 'band-row', harder: 'inverted-row' }),
+  quickExercise({ id: 'band-pull-apart', name: 'Band Pull-Apart', pattern: 'pull', muscles: ['upper back', 'rear delts'], equipment: ['resistance band'], easier: 'scapular-pull-up', harder: 'face-pull' }),
+  quickExercise({ id: 'forward-lunge', name: 'Forward Lunge', pattern: 'lunge', muscles: ['quads', 'glutes', 'hamstrings'], easier: 'reverse-lunge', harder: 'bulgarian-split-squat', avoid: ['knees'] }),
+  quickExercise({ id: 'bulgarian-split-squat', name: 'Bulgarian Split Squat', pattern: 'lunge', muscles: ['quads', 'glutes', 'hamstrings'], equipment: ['bodyweight', 'dumbbell', 'bench'], difficulty: 'advanced', easier: 'reverse-lunge', harder: 'bulgarian-split-squat', avoid: ['knees'] }),
+  quickExercise({ id: 'step-up', name: 'Step-Up', pattern: 'lunge', muscles: ['quads', 'glutes', 'hamstrings'], equipment: ['box', 'bench', 'bodyweight'], easier: 'reverse-lunge', harder: 'bulgarian-split-squat', avoid: ['knees'] }),
+  quickExercise({ id: 'glute-bridge', name: 'Glute Bridge', pattern: 'hinge', muscles: ['glutes', 'hamstrings', 'core'], easier: 'bodyweight-squat', harder: 'hip-thrust', avoid: ['lower_back'] }),
+  quickExercise({ id: 'calf-raise', name: 'Calf Raise', pattern: 'squat', muscles: ['calves', 'ankles'], equipment: ['bodyweight', 'dumbbell'], easier: 'calf-raise', harder: 'jump-squat', avoid: ['ankles'] }),
+  quickExercise({ id: 'wall-sit', name: 'Wall Sit', pattern: 'squat', muscles: ['quads', 'glutes', 'core'], easier: 'bodyweight-squat', harder: 'goblet-squat', avoid: ['knees'] }),
+  quickExercise({ id: 'jump-squat', name: 'Jump Squat', pattern: 'power', muscles: ['quads', 'glutes', 'calves'], difficulty: 'intermediate', goals: ['athleticism', 'mma_bjj', 'fat_loss'], sport: ['mma', 'bjj', 'wrestling'], easier: 'bodyweight-squat', harder: 'broad-jump', avoid: ['knees', 'ankles'] }),
+  quickExercise({ id: 'broad-jump', name: 'Broad Jump', pattern: 'power', muscles: ['glutes', 'quads', 'hamstrings', 'calves'], difficulty: 'intermediate', goals: ['athleticism', 'mma_bjj'], sport: ['mma', 'wrestling'], easier: 'jump-squat', harder: 'box-jump', avoid: ['knees', 'ankles', 'lower_back'] }),
+  quickExercise({ id: 'lateral-bound', name: 'Lateral Bound', pattern: 'power', muscles: ['glutes', 'quads', 'adductors', 'calves'], difficulty: 'intermediate', goals: ['athleticism', 'mma_bjj'], sport: ['mma', 'wrestling'], easier: 'bodyweight-squat', harder: 'broad-jump', avoid: ['knees', 'ankles'] }),
+  quickExercise({ id: 'sled-push', name: 'Sled Push', pattern: 'conditioning', muscles: ['quads', 'glutes', 'calves', 'core'], equipment: ['sled', 'gym equipment'], difficulty: 'intermediate', goals: ['strength', 'athleticism', 'mma_bjj', 'fat_loss'], sport: ['mma', 'bjj', 'wrestling'], easier: 'incline-treadmill-walk', harder: 'sled-push', avoid: ['knees'] }),
+  quickExercise({ id: 'side-plank', name: 'Side Plank', pattern: 'core', muscles: ['obliques', 'shoulders', 'glutes'], easier: 'dead-bug', harder: 'pallof-press', avoid: ['shoulders'] }),
+  quickExercise({ id: 'leg-raise', name: 'Leg Raise', pattern: 'core', muscles: ['core', 'hip flexors'], difficulty: 'intermediate', easier: 'dead-bug', harder: 'hanging-knee-raise', avoid: ['lower_back'] }),
+  quickExercise({ id: 'hanging-knee-raise', name: 'Hanging Knee Raise', pattern: 'core', muscles: ['core', 'hip flexors', 'forearms'], equipment: ['pull-up bar'], difficulty: 'intermediate', easier: 'leg-raise', harder: 'hollow-hold', avoid: ['shoulders', 'lower_back'] }),
+  quickExercise({ id: 'russian-twist', name: 'Russian Twist', pattern: 'rotation', muscles: ['obliques', 'core'], equipment: ['bodyweight', 'dumbbell', 'medicine ball'], difficulty: 'intermediate', easier: 'dead-bug', harder: 'pallof-press', avoid: ['lower_back'] }),
+  quickExercise({ id: 'mountain-climber', name: 'Mountain Climber', pattern: 'conditioning', muscles: ['core', 'shoulders', 'hip flexors'], goals: ['fat_loss', 'endurance', 'mma_bjj', 'athleticism'], sport: ['mma', 'bjj', 'wrestling'], easier: 'bear-crawl', harder: 'burpee', avoid: ['wrists', 'shoulders'] }),
+  quickExercise({ id: 'bird-dog', name: 'Bird Dog', pattern: 'core', muscles: ['core', 'glutes', 'back'], easier: 'dead-bug', harder: 'bear-crawl', avoid: ['wrists'] }),
+  quickExercise({ id: 'ab-wheel', name: 'Ab Wheel Rollout', pattern: 'core', muscles: ['core', 'lats', 'shoulders'], equipment: ['ab wheel'], difficulty: 'advanced', easier: 'plank', harder: 'ab-wheel', avoid: ['shoulders', 'lower_back'] }),
+  quickExercise({ id: 'sprawl', name: 'Sprawl', pattern: 'conditioning', muscles: ['full body', 'hips', 'shoulders', 'core'], difficulty: 'intermediate', goals: ['mma_bjj', 'athleticism', 'fat_loss'], sport: ['mma', 'wrestling'], easier: 'squat-thrust', harder: 'sprawl-to-push-up', avoid: ['wrists', 'shoulders', 'lower_back'] }),
+  quickExercise({ id: 'shrimping', name: 'Shrimping', pattern: 'conditioning', muscles: ['hips', 'core', 'glutes'], goals: ['mma_bjj', 'mobility', 'athleticism'], sport: ['bjj', 'mma'], easier: 'hip-escape', harder: 'technical-stand-up' }),
+  quickExercise({ id: 'technical-stand-up', name: 'Technical Stand-Up', pattern: 'power', muscles: ['hips', 'core', 'shoulders', 'legs'], difficulty: 'intermediate', goals: ['mma_bjj', 'athleticism'], sport: ['bjj', 'mma'], easier: 'combat-base-transition', harder: 'technical-stand-up', avoid: ['wrists', 'shoulders', 'knees'] }),
+  quickExercise({ id: 'shot-entry', name: 'Shot Entry', pattern: 'power', muscles: ['quads', 'glutes', 'core'], difficulty: 'intermediate', goals: ['mma_bjj', 'athleticism'], sport: ['mma', 'wrestling'], easier: 'penetration-step', harder: 'sprawl-to-shot', avoid: ['knees'] }),
+  quickExercise({ id: 'penetration-step', name: 'Penetration Step', pattern: 'lunge', muscles: ['quads', 'glutes', 'core'], goals: ['mma_bjj', 'athleticism'], sport: ['mma', 'wrestling'], easier: 'reverse-lunge', harder: 'shot-entry', avoid: ['knees'] }),
+  quickExercise({ id: 'hip-escape', name: 'Hip Escape', pattern: 'core', muscles: ['hips', 'obliques', 'glutes'], goals: ['mma_bjj', 'mobility'], sport: ['bjj', 'mma'], easier: 'glute-bridge', harder: 'shrimping' }),
+  quickExercise({ id: 'bridge-and-roll', name: 'Bridge and Roll', pattern: 'power', muscles: ['glutes', 'core', 'back'], goals: ['mma_bjj', 'athleticism'], sport: ['bjj', 'mma'], easier: 'glute-bridge', harder: 'bridge-and-roll', avoid: ['neck', 'lower_back'] }),
+  quickExercise({ id: 'shadow-boxing', name: 'Shadow Boxing Rounds', pattern: 'conditioning', muscles: ['full body', 'shoulders', 'core', 'calves'], goals: ['mma_bjj', 'endurance', 'fat_loss', 'athleticism'], sport: ['mma', 'striking'], easier: 'footwork-drill', harder: 'shadow-boxing' }),
+  quickExercise({ id: 'footwork-drill', name: 'Footwork Drill', pattern: 'conditioning', muscles: ['calves', 'hips', 'core'], goals: ['mma_bjj', 'athleticism', 'endurance'], sport: ['mma', 'striking'], easier: 'marching-high-knees', harder: 'shadow-boxing', avoid: ['ankles'] }),
+  quickExercise({ id: 'sprawl-to-push-up', name: 'Sprawl to Push-Up', pattern: 'conditioning', muscles: ['full body', 'chest', 'hips', 'core'], difficulty: 'advanced', goals: ['mma_bjj', 'athleticism', 'fat_loss'], sport: ['mma', 'wrestling'], easier: 'sprawl', harder: 'sprawl-to-shot', avoid: ['wrists', 'shoulders', 'lower_back'] }),
+  quickExercise({ id: 'medicine-ball-slam', name: 'Medicine Ball Slam', pattern: 'power', muscles: ['lats', 'core', 'shoulders', 'hips'], equipment: ['medicine ball'], difficulty: 'intermediate', goals: ['mma_bjj', 'athleticism', 'fat_loss'], sport: ['mma', 'bjj', 'wrestling'], easier: 'battle-rope-waves', harder: 'medicine-ball-rotational-throw', avoid: ['shoulders', 'lower_back'] }),
+  quickExercise({ id: 'burpee', name: 'Burpee', pattern: 'conditioning', muscles: ['full body', 'chest', 'legs', 'core'], difficulty: 'intermediate', goals: ['fat_loss', 'endurance', 'mma_bjj', 'athleticism'], sport: ['mma', 'bjj', 'wrestling'], easier: 'squat-thrust', harder: 'sprawl-to-push-up', avoid: ['wrists', 'shoulders', 'lower_back'] }),
+  quickExercise({ id: 'bike-interval', name: 'Bike Intervals', pattern: 'conditioning', muscles: ['quads', 'glutes', 'cardiovascular system'], equipment: ['stationary bike', 'gym equipment'], goals: ['fat_loss', 'endurance', 'mma_bjj'], easier: 'incline-treadmill-walk', harder: 'air-bike-interval' }),
+  quickExercise({ id: 'rowing-machine', name: 'Rowing Machine', pattern: 'conditioning', muscles: ['legs', 'back', 'core', 'arms'], equipment: ['rowing machine', 'gym equipment'], difficulty: 'intermediate', goals: ['fat_loss', 'endurance', 'athleticism'], easier: 'bike-interval', harder: 'sprint-interval', avoid: ['lower_back'] }),
+  quickExercise({ id: 'incline-treadmill-walk', name: 'Treadmill Incline Walk', pattern: 'conditioning', muscles: ['glutes', 'calves', 'cardiovascular system'], equipment: ['treadmill', 'gym equipment'], goals: ['fat_loss', 'endurance', 'recovery'], easier: 'marching-high-knees', harder: 'sprint-interval', avoid: ['ankles'] }),
+  quickExercise({ id: 'sprint-interval', name: 'Sprint Intervals', pattern: 'conditioning', muscles: ['full body', 'hamstrings', 'glutes', 'calves'], difficulty: 'advanced', goals: ['athleticism', 'mma_bjj', 'fat_loss', 'endurance'], sport: ['mma', 'wrestling'], easier: 'shuttle-run', harder: 'sprint-interval', avoid: ['hamstrings', 'knees', 'ankles'] }),
+  quickExercise({ id: 'shuttle-run', name: 'Shuttle Runs', pattern: 'conditioning', muscles: ['legs', 'hips', 'cardiovascular system'], difficulty: 'intermediate', goals: ['athleticism', 'mma_bjj', 'fat_loss', 'endurance'], sport: ['mma', 'wrestling'], easier: 'footwork-drill', harder: 'sprint-interval', avoid: ['knees', 'ankles'] }),
+  quickExercise({ id: 'assault-bike', name: 'Assault Bike', pattern: 'conditioning', muscles: ['full body', 'legs', 'arms', 'core'], equipment: ['assault bike', 'gym equipment'], difficulty: 'intermediate', goals: ['fat_loss', 'endurance', 'mma_bjj', 'athleticism'], easier: 'bike-interval', harder: 'air-bike-interval' }),
+  quickExercise({ id: 'squat-thrust', name: 'Squat Thrust', pattern: 'conditioning', muscles: ['legs', 'core', 'shoulders'], goals: ['fat_loss', 'endurance', 'athleticism'], easier: 'bodyweight-squat', harder: 'burpee', avoid: ['wrists', 'shoulders'] }),
+  quickExercise({ id: 'marching-high-knees', name: 'Marching High Knees', pattern: 'conditioning', muscles: ['hip flexors', 'calves', 'core'], goals: ['recovery', 'mobility', 'fat_loss'], easier: 'marching-high-knees', harder: 'jump-rope' }),
+  quickExercise({ id: 'combat-base-transition', name: 'Combat Base Transition', pattern: 'mobility', muscles: ['hips', 'core', 'legs'], goals: ['mma_bjj', 'mobility', 'recovery'], sport: ['bjj', 'mma'], easier: 'hip-escape', harder: 'technical-stand-up', avoid: ['knees', 'wrists'] }),
+];
+
+export const exerciseLibrary: ExerciseLibraryItem[] = Array.from(
+  new Map([...baseExerciseLibrary, ...requestedExerciseLibrary].map((item) => [item.id, item])).values(),
+);
 
 export type Exercise = ExerciseLibraryItem & {
   muscles: string[];

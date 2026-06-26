@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "target": "ES2021",
+    "lib": ["ES2021", "DOM"],
+    "strict": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "module": "CommonJS",
+    "moduleResolution": "Node",
+    "baseUrl": ".",
+    "paths": { "@/*": ["./*"] },
+    "outDir": ".test-build",
+    "noEmit": false,
+    "declaration": false
+  },
+  "include": ["lib/data/**/*.ts", "lib/training/**/*.ts"]
+}

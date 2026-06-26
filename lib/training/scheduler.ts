@@ -14,6 +14,7 @@ export const planLabels: Record<TrainingPlanType, string> = {
   upper_lower: 'Upper Lower',
   full_body: 'Full Body',
   mma_bjj_athletic: 'MMA/BJJ Athletic',
+  hybrid: 'Hybrid Strength + Athletic',
   mobility_only: 'Mobility Only',
 };
 
@@ -35,6 +36,7 @@ const planSequences: Record<TrainingPlanType, WorkoutSplitType[]> = {
   upper_lower: ['upper', 'lower'],
   full_body: ['full_body', 'mobility_only'],
   mma_bjj_athletic: ['mma_bjj', 'pull', 'push', 'legs', 'mobility_only'],
+  hybrid: ['upper', 'lower', 'mma_bjj', 'full_body', 'mobility_only'],
   mobility_only: ['mobility_only', 'recovery'],
 };
 
@@ -48,12 +50,13 @@ export type WorkoutRecommendation = {
 };
 
 export function recommendWorkoutType(profile: UserProfile, history: TrainingHistoryItem[], feedback: UserFeedback[] = []): WorkoutRecommendation {
+  // The split advances only from completed history, so missing a calendar day never skips a workout.
   const sequence = planSequences[profile.trainingPlan] ?? planSequences.push_pull_legs;
   const planLabel = planLabels[profile.trainingPlan] ?? planLabels.push_pull_legs;
   const missedDays = getMissedDays(history);
   const lastCompleted = history.find((entry) => entry.workoutType);
   const lastTrainingType = history.find((entry) => entry.workoutType && !['recovery', 'rest'].includes(entry.workoutType))?.workoutType;
-  const recoveryOverride = getRecoveryOverride(profile, history, feedback);
+  const recoveryOverride: WorkoutSplitType | null = profile.goal === 'recovery' ? 'recovery' : getRecoveryOverride(profile, history, feedback);
   const nextFromSplit = nextInSequence(sequence, lastTrainingType);
   const workoutType = recoveryOverride ?? avoidImmediateRepeat(nextFromSplit, lastCompleted?.workoutType, sequence);
 

@@ -75,6 +75,8 @@ const storageKeys = {
   history: 'forgefit-v2-history',
   mobilityHistory: 'forgefit-v2-mobility-history',
   feedback: 'forgefit-v2-feedback',
+  generatedWorkout: 'forgefit-v3-next-workout',
+  generatedMobility: 'forgefit-v3-next-mobility',
 };
 
 const tabs: { key: TabKey; label: string; Icon: LucideIcon }[] = [
@@ -95,6 +97,7 @@ const goalOptions: { label: string; value: TrainingGoal }[] = [
   { label: 'Athleticism', value: 'athleticism' },
   { label: 'MMA/BJJ support', value: 'mma_bjj' },
   { label: 'Mobility', value: 'mobility' },
+  { label: 'Recovery', value: 'recovery' },
   { label: 'Endurance', value: 'endurance' },
 ];
 
@@ -103,6 +106,7 @@ const planOptions: { label: string; value: TrainingPlanType }[] = [
   { label: planLabels.upper_lower, value: 'upper_lower' },
   { label: planLabels.full_body, value: 'full_body' },
   { label: planLabels.mma_bjj_athletic, value: 'mma_bjj_athletic' },
+  { label: planLabels.hybrid, value: 'hybrid' },
   { label: planLabels.mobility_only, value: 'mobility_only' },
 ];
 
@@ -118,7 +122,10 @@ const painOptions: MobilityArea[] = [
   'hamstrings',
   'knees',
   'ankles',
+  'calves',
 ];
+
+const durationOptions = [10, 20, 30, 45, 60].map((minutes) => ({ label: `${minutes} minutes`, value: String(minutes) }));
 
 const movementFilters: ('all' | MovementPattern)[] = [
   'all',
@@ -144,9 +151,12 @@ const defaultProfile: UserProfile = {
   sorenessLevel: 3,
   readinessLevel: 76,
   painAreas: [],
+  tightAreas: [],
+  injuryLimitations: [],
   experienceLevel: 'intermediate',
   workoutLength: 45,
-  mobilityMinutes: 10,
+  mobilityMinutes: 20,
+  onboardingComplete: false,
 };
 
 const defaultCalibrationResult: CalibrationResult = {
@@ -209,6 +219,8 @@ export default function Page() {
     const storedHistory = readJson<TrainingHistoryItem[]>(storageKeys.history, []);
     const storedMobilityHistory = readJson<MobilityHistoryItem[]>(storageKeys.mobilityHistory, []);
     const storedFeedback = readJson<UserFeedback[]>(storageKeys.feedback, []);
+    const storedWorkout = readJson<WorkoutSession | null>(storageKeys.generatedWorkout, null);
+    const storedMobility = readJson<MobilitySession | null>(storageKeys.generatedMobility, null);
 
     setProfile(storedProfile);
     setEquipmentProfile(storedEquipment);
@@ -217,8 +229,8 @@ export default function Page() {
     setHistory(storedHistory);
     setMobilityHistory(storedMobilityHistory);
     setFeedback(storedFeedback);
-    setGeneratedWorkout(generateWorkoutPlan({ profile: storedProfile, mobilityScores: storedScores, history: storedHistory, feedback: storedFeedback }));
-    setGeneratedMobility(generateMobilityPlan({
+    const initialWorkout = storedWorkout?.exercises ? storedWorkout : generateWorkoutPlan({ profile: storedProfile, mobilityScores: storedScores, history: storedHistory, feedback: storedFeedback });
+    const initialMobility = storedMobility?.steps ? storedMobility : generateMobilityPlan({
       profile: storedProfile,
       mobilityScores: storedScores,
       mode: mobilityMode,
@@ -226,7 +238,11 @@ export default function Page() {
       feedback: storedFeedback,
       history: storedHistory,
       mobilityHistory: storedMobilityHistory,
-    }));
+    });
+    setGeneratedWorkout(initialWorkout);
+    setGeneratedMobility(initialMobility);
+    writeJson(storageKeys.generatedWorkout, initialWorkout);
+    writeJson(storageKeys.generatedMobility, initialMobility);
 
     async function loadSession() {
       const { data } = await supabase.auth.getSession();
@@ -246,8 +262,8 @@ export default function Page() {
           ? ((profileRow as Record<string, unknown>).equipment_profile as string[])
           : mappedProfile.equipment;
         setEquipmentProfile(equipmentListToProfile(rowEquipment));
-        setGeneratedWorkout(generateWorkoutPlan({ profile: mappedProfile, mobilityScores: storedScores, history: storedHistory, feedback: storedFeedback }));
-        setGeneratedMobility(generateMobilityPlan({
+        const accountWorkout = generateWorkoutPlan({ profile: mappedProfile, mobilityScores: storedScores, history: storedHistory, feedback: storedFeedback });
+        const accountMobility = generateMobilityPlan({
           profile: mappedProfile,
           mobilityScores: storedScores,
           mode: mobilityMode,
@@ -255,7 +271,11 @@ export default function Page() {
           feedback: storedFeedback,
           history: storedHistory,
           mobilityHistory: storedMobilityHistory,
-        }));
+        });
+        setGeneratedWorkout(accountWorkout);
+        setGeneratedMobility(accountMobility);
+        writeJson(storageKeys.generatedWorkout, accountWorkout);
+        writeJson(storageKeys.generatedMobility, accountMobility);
       }
     }
 
@@ -278,6 +298,27 @@ export default function Page() {
       updateProfile({ equipment });
       return next;
     });
+  }
+
+  function selectEquipmentPreset(preset: 'bodyweight' | 'dumbbells' | 'bands' | 'pullupBar' | 'gym' | 'fullGym') {
+    const next: EquipmentProfile = {
+      bodyweight: true,
+      dumbbells: preset === 'dumbbells' || preset === 'fullGym',
+      gym: preset === 'gym' || preset === 'fullGym',
+      planetFitness: false,
+      bands: preset === 'bands' || preset === 'fullGym',
+      pullupBar: preset === 'pullupBar' || preset === 'fullGym',
+      machines: preset === 'gym' || preset === 'fullGym',
+      cables: preset === 'gym' || preset === 'fullGym',
+      barbell: preset === 'fullGym',
+      kettlebells: preset === 'fullGym',
+      medicineBall: preset === 'fullGym',
+      foamRoller: preset === 'fullGym',
+      bench: preset === 'dumbbells' || preset === 'gym' || preset === 'fullGym',
+    };
+    setEquipmentProfile(next);
+    writeJson(storageKeys.equipment, next);
+    updateProfile({ equipment: equipmentProfileToList(next) });
   }
 
   function togglePain(area: MobilityArea, target: 'profile' | 'workoutFeedback' | 'mobilityFeedback') {
@@ -332,8 +373,12 @@ export default function Page() {
     writeJson(storageKeys.calibration, calibrationScores);
     writeJson(storageKeys.mobilityScores, nextScores);
     setStatusMessage('Calibration saved. Workout and mobility recommendations now use these scores.');
-    setGeneratedWorkout(generateWorkoutPlan({ profile, mobilityScores: nextScores, history, feedback }));
-    setGeneratedMobility(generateMobilityPlan({ profile, mobilityScores: nextScores, mode: mobilityMode, timeAvailable: profile.mobilityMinutes, feedback, history, mobilityHistory }));
+    const nextWorkout = generateWorkoutPlan({ profile, mobilityScores: nextScores, history, feedback });
+    const nextMobility = generateMobilityPlan({ profile, mobilityScores: nextScores, mode: mobilityMode, timeAvailable: profile.mobilityMinutes, feedback, history, mobilityHistory });
+    setGeneratedWorkout(nextWorkout);
+    setGeneratedMobility(nextMobility);
+    writeJson(storageKeys.generatedWorkout, nextWorkout);
+    writeJson(storageKeys.generatedMobility, nextMobility);
     setActiveTab('home');
 
     if (userId && userId !== 'local-demo') {
@@ -353,10 +398,18 @@ export default function Page() {
   }
 
   function generateWorkout() {
-    const workout = generateWorkoutPlan({ profile, mobilityScores, history, feedback });
+    const workout = generateWorkoutPlan({ profile, mobilityScores, history, feedback, generationIndex: generatedWorkout?.generationIndex ?? 0 });
     setGeneratedWorkout(workout);
+    writeJson(storageKeys.generatedWorkout, workout);
     setStatusMessage(`${workout.title} recommended: ${workout.recommendationReason}`);
     setActiveTab('workout');
+  }
+
+  function regenerateWorkout() {
+    const workout = generateWorkoutPlan({ profile, mobilityScores, history, feedback, generationIndex: (generatedWorkout?.generationIndex ?? 0) + 1 });
+    setGeneratedWorkout(workout);
+    writeJson(storageKeys.generatedWorkout, workout);
+    setStatusMessage(`Workout regenerated with a different exercise mix. ${workout.recommendationReason}`);
   }
 
   function generateMobility() {
@@ -368,10 +421,50 @@ export default function Page() {
       feedback,
       history,
       mobilityHistory,
+      generationIndex: generatedMobility?.generationIndex ?? 0,
     });
     setGeneratedMobility(routine);
+    writeJson(storageKeys.generatedMobility, routine);
     setStatusMessage(`${routine.title} recommended: ${routine.recommendationReason}`);
     setActiveTab('mobility');
+  }
+
+  function regenerateMobility() {
+    const routine = generateMobilityPlan({
+      profile,
+      mobilityScores,
+      mode: mobilityMode,
+      timeAvailable: profile.mobilityMinutes,
+      feedback,
+      history,
+      mobilityHistory,
+      generationIndex: (generatedMobility?.generationIndex ?? 0) + 1,
+    });
+    setGeneratedMobility(routine);
+    writeJson(storageKeys.generatedMobility, routine);
+    setStatusMessage('Stretch session regenerated with different drills while keeping the same needs and recovery rules.');
+  }
+
+  async function completeOnboarding() {
+    const nextProfile = { ...profile, onboardingComplete: true };
+    setProfile(nextProfile);
+    writeJson(storageKeys.profile, nextProfile);
+    const nextWorkout = generateWorkoutPlan({ profile: nextProfile, mobilityScores, history, feedback });
+    const nextMobility = generateMobilityPlan({ profile: nextProfile, mobilityScores, mode: 'recovery_day', timeAvailable: nextProfile.mobilityMinutes, feedback, history, mobilityHistory });
+    setGeneratedWorkout(nextWorkout);
+    setGeneratedMobility(nextMobility);
+    writeJson(storageKeys.generatedWorkout, nextWorkout);
+    writeJson(storageKeys.generatedMobility, nextMobility);
+    setStatusMessage('Training setup saved. Your next workout and mobility session are ready.');
+
+    if (userId && userId !== 'local-demo') {
+      await supabase.from('profiles').update({
+        primary_goal: nextProfile.goal,
+        experience_level: nextProfile.experienceLevel,
+        equipment_profile: nextProfile.equipment,
+        profile_completed: true,
+      }).eq('id', userId);
+    }
   }
 
   function swapExercise(exercise: WorkoutExercise) {
@@ -383,14 +476,16 @@ export default function Page() {
       return;
     }
 
-    setGeneratedWorkout({
+    const nextWorkout = {
       ...generatedWorkout,
       exercises: generatedWorkout.exercises.map((entry) =>
         entry.item.id === exercise.item.id
           ? { ...entry, item: replacement, reason: `Swapped from ${exercise.item.name} for equipment or comfort.` }
           : entry,
       ),
-    });
+    };
+    setGeneratedWorkout(nextWorkout);
+    writeJson(storageKeys.generatedWorkout, nextWorkout);
   }
 
   async function logFeedback(sessionType: UserFeedback['sessionType'], draft: FeedbackDraft) {
@@ -434,6 +529,8 @@ export default function Page() {
       });
       setGeneratedWorkout(nextWorkout);
       setGeneratedMobility(nextMobility);
+      writeJson(storageKeys.generatedWorkout, nextWorkout);
+      writeJson(storageKeys.generatedMobility, nextMobility);
       setStatusMessage(entry.completed
         ? `Workout completed. Next up: ${workoutTypeLabels[nextWorkout.workoutType]}.`
         : 'Workout feedback saved as partial; the split stays on the same recommendation.');
@@ -452,6 +549,7 @@ export default function Page() {
         mobilityHistory: nextMobilityHistory,
       });
       setGeneratedMobility(nextMobility);
+      writeJson(storageKeys.generatedMobility, nextMobility);
       setStatusMessage(entry.completed
         ? `Stretch session completed. Next mobility recommendation: ${nextMobility.title}.`
         : 'Mobility feedback saved as partial; the routine remains available.');
@@ -550,6 +648,19 @@ export default function Page() {
     );
   }
 
+  if (!profile.onboardingComplete) {
+    return (
+      <OnboardingPanel
+        profile={profile}
+        updateProfile={updateProfile}
+        equipmentProfile={equipmentProfile}
+        selectEquipmentPreset={selectEquipmentPreset}
+        completeOnboarding={completeOnboarding}
+        signOut={signOut}
+      />
+    );
+  }
+
   return (
     <main className="min-h-screen bg-[#070807] text-zinc-50">
       <section className="mx-auto flex min-h-screen w-full max-w-6xl flex-col px-4 pb-28 pt-4 sm:px-6 lg:px-8">
@@ -591,8 +702,12 @@ export default function Page() {
                 recentPatterns={recentPatterns}
                 generatedWorkout={generatedWorkout}
                 generatedMobility={generatedMobility}
-                generateWorkout={generateWorkout}
-                generateMobility={generateMobility}
+                history={history}
+                mobilityHistory={mobilityHistory}
+                regenerateWorkout={regenerateWorkout}
+                regenerateMobility={regenerateMobility}
+                completeWorkout={() => logFeedback('workout', workoutFeedback)}
+                completeMobility={() => logFeedback('mobility', mobilityFeedback)}
                 setActiveTab={setActiveTab}
               />
             )}
@@ -603,6 +718,7 @@ export default function Page() {
                 updateProfile={updateProfile}
                 generatedWorkout={generatedWorkout}
                 generateWorkout={generateWorkout}
+                regenerateWorkout={regenerateWorkout}
                 swapExercise={swapExercise}
                 feedbackDraft={workoutFeedback}
                 setFeedbackDraft={setWorkoutFeedback}
@@ -620,6 +736,7 @@ export default function Page() {
                 setMode={setMobilityMode}
                 generatedMobility={generatedMobility}
                 generateMobility={generateMobility}
+                regenerateMobility={regenerateMobility}
                 feedbackDraft={mobilityFeedback}
                 setFeedbackDraft={setMobilityFeedback}
                 togglePain={(area) => togglePain(area, 'mobilityFeedback')}
@@ -720,8 +837,12 @@ function HomeDashboard({
   recentPatterns,
   generatedWorkout,
   generatedMobility,
-  generateWorkout,
-  generateMobility,
+  history,
+  mobilityHistory,
+  regenerateWorkout,
+  regenerateMobility,
+  completeWorkout,
+  completeMobility,
   setActiveTab,
 }: {
   userEmail: string | null;
@@ -731,28 +852,37 @@ function HomeDashboard({
   recentPatterns: MovementPattern[];
   generatedWorkout: WorkoutSession | null;
   generatedMobility: MobilitySession | null;
-  generateWorkout: () => void;
-  generateMobility: () => void;
+  history: TrainingHistoryItem[];
+  mobilityHistory: MobilityHistoryItem[];
+  regenerateWorkout: () => void;
+  regenerateMobility: () => void;
+  completeWorkout: () => void;
+  completeMobility: () => void;
   setActiveTab: (tab: TabKey) => void;
 }) {
+  const weeklyWorkouts = countWithinDays(history.map((item) => item.completedAt), 7);
+  const weeklyMobility = countWithinDays(mobilityHistory.map((item) => item.completedAt), 7);
+  const consistency = calculateConsistency([...history.map((item) => item.completedAt), ...mobilityHistory.map((item) => item.completedAt)]);
+
   return (
     <>
-      <section className="grid gap-3 sm:grid-cols-3">
+      <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard icon={Zap} label="Readiness" value={`${profile.readinessLevel}%`} detail={`${profile.sorenessLevel}/10 soreness`} />
         <StatCard icon={HeartPulse} label="Mobility" value={`${mobilityScore}`} detail={weakestScores.map((score) => formatArea(score.area)).join(', ')} />
         <StatCard icon={Shield} label="Combat load" value={`${profile.combatSchedule.mma + profile.combatSchedule.bjj + profile.combatSchedule.wrestling + profile.combatSchedule.striking}/wk`} detail={goalLabel(profile.goal)} />
+        <StatCard icon={TrendingUp} label="Consistency" value={`${consistency} days`} detail={`${weeklyWorkouts} workouts, ${weeklyMobility} mobility this week`} />
       </section>
 
       <Panel title="Today" eyebrow={userEmail ?? 'Demo athlete'}>
         <div className="grid gap-3 sm:grid-cols-2">
-          <button onClick={generateWorkout} className="rounded-xl border border-orange-400/30 bg-orange-500 px-4 py-4 text-left text-black">
+          <button onClick={regenerateWorkout} className="rounded-xl border border-orange-400/30 bg-orange-500 px-4 py-4 text-left text-black">
             <Dumbbell className="h-5 w-5" />
-            <span className="mt-3 block text-lg font-black">Refresh workout recommendation</span>
+            <span className="mt-3 block text-lg font-black">Regenerate Workout</span>
             <span className="mt-1 block text-sm font-semibold text-black/70">{planLabels[profile.trainingPlan]}, {profile.workoutLength} min</span>
           </button>
-          <button onClick={generateMobility} className="rounded-xl border border-emerald-300/30 bg-emerald-400 px-4 py-4 text-left text-black">
+          <button onClick={regenerateMobility} className="rounded-xl border border-emerald-300/30 bg-emerald-400 px-4 py-4 text-left text-black">
             <Activity className="h-5 w-5" />
-            <span className="mt-3 block text-lg font-black">Refresh mobility recommendation</span>
+            <span className="mt-3 block text-lg font-black">Regenerate Stretch Session</span>
             <span className="mt-1 block text-sm font-semibold text-black/70">{profile.mobilityMinutes} min, history-aware</span>
           </button>
         </div>
@@ -763,7 +893,12 @@ function HomeDashboard({
           {generatedWorkout ? (
             <>
               <p className="mb-3 text-sm leading-6 text-zinc-300">{generatedWorkout.recommendationReason}</p>
+              <div className="mb-3 flex flex-wrap gap-2"><Tag>{generatedWorkout.title}</Tag><Tag>{generatedWorkout.intensity}</Tag><Tag>{generatedWorkout.durationMinutes} min</Tag></div>
               <CompactWorkout workout={generatedWorkout} />
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                <button onClick={() => setActiveTab('workout')} className="h-11 rounded-lg border border-white/10 bg-white/10 text-sm font-black">Open</button>
+                <button onClick={completeWorkout} className="h-11 rounded-lg bg-orange-500 text-sm font-black text-black">Complete Workout</button>
+              </div>
             </>
           ) : (
             <EmptyState text="Run calibration or generate from defaults." action="Open Workout" onClick={() => setActiveTab('workout')} />
@@ -774,12 +909,23 @@ function HomeDashboard({
             <>
               <p className="mb-3 text-sm leading-6 text-zinc-300">{generatedMobility.recommendationReason}</p>
               <CompactMobility routine={generatedMobility} />
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                <button onClick={() => setActiveTab('mobility')} className="h-11 rounded-lg border border-white/10 bg-white/10 text-sm font-black">Open</button>
+                <button onClick={completeMobility} className="h-11 rounded-lg bg-emerald-400 text-sm font-black text-black">Complete Stretch Session</button>
+              </div>
             </>
           ) : (
             <EmptyState text="Mobility uses your lowest scores and session mode." action="Open Mobility" onClick={() => setActiveTab('mobility')} />
           )}
         </Panel>
       </section>
+
+      <Panel title="Last completed" eyebrow="History">
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Metric label="Workout" value={history[0]?.workoutType ? workoutTypeLabels[history[0].workoutType] : 'None'} tone="amber" />
+          <Metric label="Stretch session" value={mobilityHistory[0]?.sessionTitle ?? 'None'} tone="green" />
+        </div>
+      </Panel>
 
       <Panel title="Recent training pressure" eyebrow="Balance">
         <div className="flex flex-wrap gap-2">
@@ -797,6 +943,7 @@ function WorkoutTab({
   updateProfile,
   generatedWorkout,
   generateWorkout,
+  regenerateWorkout,
   swapExercise,
   feedbackDraft,
   setFeedbackDraft,
@@ -807,6 +954,7 @@ function WorkoutTab({
   updateProfile: (next: Partial<UserProfile>) => void;
   generatedWorkout: WorkoutSession | null;
   generateWorkout: () => void;
+  regenerateWorkout: () => void;
   swapExercise: (exercise: WorkoutExercise) => void;
   feedbackDraft: FeedbackDraft;
   setFeedbackDraft: (next: FeedbackDraft | ((old: FeedbackDraft) => FeedbackDraft)) => void;
@@ -830,7 +978,7 @@ function WorkoutTab({
             ]}
             onChange={(value) => updateProfile({ experienceLevel: value as UserProfile['experienceLevel'] })}
           />
-          <SliderField label="Workout length" value={profile.workoutLength} min={20} max={75} suffix="min" onChange={(value) => updateProfile({ workoutLength: value })} />
+          <SelectField label="Workout length" value={String(profile.workoutLength)} options={durationOptions} onChange={(value) => updateProfile({ workoutLength: Number(value) })} />
           <SliderField label="Energy readiness" value={profile.readinessLevel} min={1} max={100} suffix="%" onChange={(value) => updateProfile({ readinessLevel: value })} />
           <SliderField label="Soreness" value={profile.sorenessLevel} min={1} max={10} suffix="/10" onChange={(value) => updateProfile({ sorenessLevel: value })} />
           <SliderField label="Training days" value={profile.trainingDaysPerWeek} min={1} max={7} suffix="/wk" onChange={(value) => updateProfile({ trainingDaysPerWeek: value })} />
@@ -848,10 +996,10 @@ function WorkoutTab({
         </div>
 
         <PainPicker selected={profile.painAreas} togglePain={togglePain} />
-        <button onClick={generateWorkout} className="mt-5 inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-orange-500 px-4 font-black text-black">
-          <Zap className="h-5 w-5" />
-          Generate personalized workout
-        </button>
+        <div className="mt-5 grid gap-2 sm:grid-cols-2">
+          <button onClick={generateWorkout} className="inline-flex h-12 items-center justify-center gap-2 rounded-lg bg-orange-500 px-4 font-black text-black"><Zap className="h-5 w-5" />Generate Workout</button>
+          <button onClick={regenerateWorkout} className="inline-flex h-12 items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/10 px-4 font-black"><RotateCcw className="h-5 w-5" />Regenerate Workout</button>
+        </div>
       </Panel>
 
       {generatedWorkout && (
@@ -859,6 +1007,7 @@ function WorkoutTab({
           <div className="mb-4 rounded-xl border border-orange-300/20 bg-orange-300/10 p-3 text-sm leading-6 text-orange-100">
             <span className="font-black">{workoutTypeLabels[generatedWorkout.workoutType]}</span> - {generatedWorkout.recommendationReason}
           </div>
+          <div className="mb-4 flex flex-wrap gap-2"><Tag>{generatedWorkout.intensity} intensity</Tag><Tag>{generatedWorkout.durationMinutes} minutes</Tag><Tag>{generatedWorkout.exercises.length} exercises</Tag></div>
           <div className="rounded-xl border border-amber-300/20 bg-amber-300/10 p-3 text-sm text-amber-100">
             <AlertTriangle className="mr-2 inline h-4 w-4" />
             {generatedWorkout.safetyNote}
@@ -899,6 +1048,7 @@ function MobilityTab({
   setMode,
   generatedMobility,
   generateMobility,
+  regenerateMobility,
   feedbackDraft,
   setFeedbackDraft,
   togglePain,
@@ -911,6 +1061,7 @@ function MobilityTab({
   setMode: (mode: MobilitySessionMode) => void;
   generatedMobility: MobilitySession | null;
   generateMobility: () => void;
+  regenerateMobility: () => void;
   feedbackDraft: FeedbackDraft;
   setFeedbackDraft: (next: FeedbackDraft | ((old: FeedbackDraft) => FeedbackDraft)) => void;
   togglePain: (area: MobilityArea) => void;
@@ -937,13 +1088,19 @@ function MobilityTab({
           ))}
         </div>
         <div className="mt-4 grid gap-3 sm:grid-cols-2">
-          <SliderField label="Time available" value={profile.mobilityMinutes} min={4} max={20} suffix="min" onChange={(value) => updateProfile({ mobilityMinutes: value })} />
+          <SelectField label="Time available" value={String(profile.mobilityMinutes)} options={durationOptions} onChange={(value) => updateProfile({ mobilityMinutes: Number(value) })} />
           <SliderField label="Energy readiness" value={profile.readinessLevel} min={1} max={100} suffix="%" onChange={(value) => updateProfile({ readinessLevel: value })} />
         </div>
-        <button onClick={generateMobility} className="mt-5 inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-emerald-400 px-4 font-black text-black">
-          <Activity className="h-5 w-5" />
-          Generate mobility routine
-        </button>
+        <div className="mt-4">
+          <p className="text-xs font-black uppercase tracking-[0.18em] text-zinc-400">Tight areas</p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {painOptions.map((area) => <button key={area} onClick={() => updateProfile({ tightAreas: toggleList(profile.tightAreas ?? [], area) })} className={`rounded-full px-3 py-2 text-xs font-black ${(profile.tightAreas ?? []).includes(area) ? 'bg-emerald-400 text-black' : 'bg-white/10 text-zinc-200'}`}>{formatArea(area)}</button>)}
+          </div>
+        </div>
+        <div className="mt-5 grid gap-2 sm:grid-cols-2">
+          <button onClick={generateMobility} className="inline-flex h-12 items-center justify-center gap-2 rounded-lg bg-emerald-400 px-4 font-black text-black"><Activity className="h-5 w-5" />Generate Stretch Session</button>
+          <button onClick={regenerateMobility} className="inline-flex h-12 items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/10 px-4 font-black"><RotateCcw className="h-5 w-5" />Regenerate Stretch Session</button>
+        </div>
       </Panel>
 
       {generatedMobility && (
@@ -951,6 +1108,7 @@ function MobilityTab({
           <div className="mb-4 rounded-xl border border-emerald-300/20 bg-emerald-300/10 p-3 text-sm leading-6 text-emerald-100">
             {generatedMobility.recommendationReason} {generatedMobility.progressionNote}
           </div>
+          <div className="mb-4 flex flex-wrap gap-2"><Tag>{generatedMobility.durationMinutes} minutes</Tag><Tag>{generatedMobility.steps.length} movements</Tag></div>
           <div className="mb-4 flex flex-wrap gap-2">
             {generatedMobility.targetAreas.map((area) => <Tag key={area}>{formatArea(area)}</Tag>)}
           </div>
@@ -1007,7 +1165,7 @@ function CalibrationTab({
             onChange={(value) => updateProfile({ experienceLevel: value as UserProfile['experienceLevel'] })}
           />
           <SliderField label="Training days" value={profile.trainingDaysPerWeek} min={1} max={7} suffix="/wk" onChange={(value) => updateProfile({ trainingDaysPerWeek: value })} />
-          <SliderField label="Workout length" value={profile.workoutLength} min={20} max={75} suffix="min" onChange={(value) => updateProfile({ workoutLength: value })} />
+          <SelectField label="Workout length" value={String(profile.workoutLength)} options={durationOptions} onChange={(value) => updateProfile({ workoutLength: Number(value) })} />
         </div>
         <PainPicker selected={profile.painAreas} togglePain={togglePain} />
       </Panel>
@@ -1215,7 +1373,13 @@ function SettingsTab({
             onChange={(value) => updateProfile({ experienceLevel: value as UserProfile['experienceLevel'] })}
           />
           <SliderField label="Training days" value={profile.trainingDaysPerWeek} min={1} max={7} suffix="/wk" onChange={(value) => updateProfile({ trainingDaysPerWeek: value })} />
-          <SliderField label="Workout length" value={profile.workoutLength} min={20} max={75} suffix="min" onChange={(value) => updateProfile({ workoutLength: value })} />
+          <SelectField label="Workout length" value={String(profile.workoutLength)} options={durationOptions} onChange={(value) => updateProfile({ workoutLength: Number(value) })} />
+          <SelectField label="Mobility length" value={String(profile.mobilityMinutes)} options={durationOptions} onChange={(value) => updateProfile({ mobilityMinutes: Number(value) })} />
+          <SelectField label="Soreness" value={profile.sorenessLevel >= 8 ? 'high' : profile.sorenessLevel >= 5 ? 'medium' : 'low'} options={[
+            { label: 'Low', value: 'low' },
+            { label: 'Medium', value: 'medium' },
+            { label: 'High', value: 'high' },
+          ]} onChange={(value) => updateProfile({ sorenessLevel: value === 'high' ? 9 : value === 'medium' ? 6 : 3 })} />
         </div>
       </Panel>
       <Panel title="Equipment profile" eyebrow={`${profile.equipment.length} options`}>
@@ -1233,6 +1397,16 @@ function SettingsTab({
       </Panel>
       <Panel title="Pain and limitations" eyebrow="Safety">
         <PainPicker selected={profile.painAreas} togglePain={togglePain} />
+        <div className="mt-4">
+          <p className="text-xs font-black uppercase tracking-[0.18em] text-zinc-400">Tight areas</p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {painOptions.map((area) => <button key={area} onClick={() => updateProfile({ tightAreas: toggleList(profile.tightAreas ?? [], area) })} className={`rounded-full px-3 py-2 text-xs font-black ${(profile.tightAreas ?? []).includes(area) ? 'bg-emerald-400 text-black' : 'bg-white/10 text-zinc-200'}`}>{formatArea(area)}</button>)}
+          </div>
+        </div>
+        <label className="mt-4 block rounded-lg border border-white/10 bg-black/25 p-3">
+          <span className="text-xs font-black uppercase tracking-[0.16em] text-zinc-400">Injury limitations</span>
+          <textarea value={(profile.injuryLimitations ?? []).join('\n')} onChange={(event) => updateProfile({ injuryLimitations: event.target.value ? [event.target.value] : [] })} rows={3} className="mt-2 w-full resize-none bg-transparent text-sm outline-none" />
+        </label>
       </Panel>
     </>
   );
@@ -1258,6 +1432,11 @@ function ExerciseCard({ exercise, onSwap }: { exercise: WorkoutExercise; onSwap:
       </div>
       <p className="mt-3 text-sm leading-6 text-zinc-300">{exercise.reason}</p>
       <p className="mt-2 text-sm leading-6 text-zinc-400">{exercise.progression}</p>
+      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+        <p className="rounded-lg bg-white/5 p-3 text-sm text-zinc-300"><span className="font-black text-white">Easier:</span> {exercise.item.easierAlternative || 'Reduce load, range, or incline'}</p>
+        <p className="rounded-lg bg-white/5 p-3 text-sm text-zinc-300"><span className="font-black text-white">Harder:</span> {exercise.item.harderAlternative || 'Add controlled reps or load'}</p>
+      </div>
+      {!!exercise.item.injuryWarnings.length && <p className="mt-3 text-sm font-bold text-amber-200">{exercise.item.injuryWarnings.join(' ')}</p>}
       <InstructionList items={exercise.item.coachingCues} />
       <MovementDetails cues={exercise.item.coachingCues} mistakes={exercise.item.commonMistakes} />
       <VideoMeta item={exercise.item} />
@@ -1277,10 +1456,11 @@ function StretchCard({ step }: { step: MobilitySession['steps'][number] }) {
     <article className="rounded-xl border border-white/10 bg-black/25 p-4">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <p className="text-xs font-black uppercase tracking-[0.18em] text-emerald-300">{step.phase} - {step.seconds}s</p>
+          <p className="text-xs font-black uppercase tracking-[0.18em] text-emerald-300">{step.phase} - {step.sets} set{step.sets === 1 ? '' : 's'} - {step.reps ?? `${step.seconds}s`}</p>
           <h3 className="mt-1 text-lg font-black">{step.item.name}</h3>
           <p className="mt-1 text-sm text-zinc-300">{step.reason}</p>
           <p className="mt-2 text-sm leading-6 text-zinc-400">{step.item.description}</p>
+          <p className="mt-2 text-sm leading-6 text-zinc-300"><span className="font-black">When:</span> {step.item.whenToUse}</p>
         </div>
         <DifficultyTag value={step.item.difficulty} />
       </div>
@@ -1289,6 +1469,11 @@ function StretchCard({ step }: { step: MobilitySession['steps'][number] }) {
         {step.item.equipment.map((item) => <Tag key={item}>{item}</Tag>)}
       </div>
       <InstructionList items={step.item.coachingCues} />
+      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+        <p className="rounded-lg bg-white/5 p-3 text-sm text-zinc-300"><span className="font-black text-white">Easier:</span> {step.item.easierAlternative || 'Use support and reduce the range'}</p>
+        <p className="rounded-lg bg-white/5 p-3 text-sm text-zinc-300"><span className="font-black text-white">Harder:</span> {step.item.harderAlternative || 'Add active control or a longer hold'}</p>
+      </div>
+      {!!step.item.injuryWarnings.length && <p className="mt-3 text-sm font-bold text-amber-200">{step.item.injuryWarnings.join(' ')}</p>}
       <MovementDetails cues={step.item.coachingCues} mistakes={step.item.commonMistakes} />
       <VideoMeta item={step.item} />
       <div className="mt-4">
@@ -1314,6 +1499,7 @@ function ExerciseLibraryCard({ item }: { item: ExerciseLibraryItem }) {
         {item.musclesWorked.slice(0, 4).map((muscle) => <Tag key={muscle}>{muscle}</Tag>)}
       </div>
       <InstructionList items={item.coachingCues} />
+      <p className="mt-3 text-sm text-zinc-300"><span className="font-black text-white">Easier:</span> {item.easierAlternative || 'Reduce load or range'} <span className="ml-2 font-black text-white">Harder:</span> {item.harderAlternative || 'Add reps or load'}</p>
       <MovementDetails cues={item.coachingCues} mistakes={item.commonMistakes} />
       <VideoMeta item={item} />
       <div className="mt-4">
@@ -1339,6 +1525,8 @@ function StretchLibraryCard({ item }: { item: StretchLibraryItem }) {
         {item.equipment.map((equipment) => <Tag key={equipment}>{equipment}</Tag>)}
       </div>
       <InstructionList items={item.coachingCues} />
+      <p className="mt-3 text-sm text-zinc-300"><span className="font-black text-white">When:</span> {item.whenToUse}</p>
+      <p className="mt-2 text-sm text-zinc-300"><span className="font-black text-white">Easier:</span> {item.easierAlternative || 'Reduce the range'} <span className="ml-2 font-black text-white">Harder:</span> {item.harderAlternative || 'Use more active control'}</p>
       <MovementDetails cues={item.coachingCues} mistakes={item.commonMistakes} />
       <VideoMeta item={item} />
       <div className="mt-4">
@@ -1393,6 +1581,105 @@ function FeedbackPanel({
         {submitLabel}
       </button>
     </Panel>
+  );
+}
+
+function OnboardingPanel({
+  profile,
+  updateProfile,
+  equipmentProfile,
+  selectEquipmentPreset,
+  completeOnboarding,
+  signOut,
+}: {
+  profile: UserProfile;
+  updateProfile: (next: Partial<UserProfile>) => void;
+  equipmentProfile: EquipmentProfile;
+  selectEquipmentPreset: (preset: 'bodyweight' | 'dumbbells' | 'bands' | 'pullupBar' | 'gym' | 'fullGym') => void;
+  completeOnboarding: () => void;
+  signOut: () => void;
+}) {
+  const soreness = profile.sorenessLevel >= 8 ? 'high' : profile.sorenessLevel >= 5 ? 'medium' : 'low';
+  const equipmentChoices = [
+    { key: 'bodyweight' as const, label: 'Bodyweight only', active: equipmentProfile.bodyweight && !equipmentProfile.dumbbells && !equipmentProfile.bands && !equipmentProfile.gym },
+    { key: 'dumbbells' as const, label: 'Dumbbells', active: equipmentProfile.dumbbells && !equipmentProfile.gym },
+    { key: 'bands' as const, label: 'Resistance bands', active: equipmentProfile.bands && !equipmentProfile.gym },
+    { key: 'pullupBar' as const, label: 'Pull-up bar', active: equipmentProfile.pullupBar && !equipmentProfile.gym },
+    { key: 'gym' as const, label: 'Gym equipment', active: equipmentProfile.gym && !equipmentProfile.barbell },
+    { key: 'fullGym' as const, label: 'Full gym', active: equipmentProfile.gym && equipmentProfile.barbell },
+  ];
+
+  return (
+    <main className="min-h-screen bg-[#070807] px-4 py-6 text-white sm:px-6">
+      <section className="mx-auto max-w-4xl">
+        <header className="flex items-center justify-between border-b border-white/10 pb-4">
+          <div>
+            <p className="text-xs font-black uppercase tracking-[0.18em] text-orange-300">ForgeFit setup</p>
+            <h1 className="mt-1 text-2xl font-black sm:text-3xl">Build your training profile</h1>
+          </div>
+          <button onClick={signOut} className="h-10 rounded-lg border border-white/10 bg-white/10 px-3 text-sm font-black">Sign out</button>
+        </header>
+
+        <div className="mt-5 grid gap-4 lg:grid-cols-2">
+          <Panel title="Training" eyebrow="Profile">
+            <div className="grid gap-3">
+              <SelectField label="Fitness level" value={profile.experienceLevel} options={[
+                { label: 'Beginner', value: 'beginner' },
+                { label: 'Intermediate', value: 'intermediate' },
+                { label: 'Advanced', value: 'advanced' },
+              ]} onChange={(value) => updateProfile({ experienceLevel: value as UserProfile['experienceLevel'] })} />
+              <SelectField label="Main goal" value={profile.goal} options={goalOptions} onChange={(value) => updateProfile({ goal: value as TrainingGoal })} />
+              <SelectField label="Preferred split" value={profile.trainingPlan} options={planOptions} onChange={(value) => updateProfile({ trainingPlan: value as TrainingPlanType })} />
+              <SelectField label="Workout time" value={String(profile.workoutLength)} options={durationOptions} onChange={(value) => updateProfile({ workoutLength: Number(value) })} />
+              <SelectField label="Mobility time" value={String(profile.mobilityMinutes)} options={durationOptions} onChange={(value) => updateProfile({ mobilityMinutes: Number(value) })} />
+              <SelectField label="Soreness" value={soreness} options={[
+                { label: 'Low', value: 'low' },
+                { label: 'Medium', value: 'medium' },
+                { label: 'High', value: 'high' },
+              ]} onChange={(value) => updateProfile({ sorenessLevel: value === 'high' ? 9 : value === 'medium' ? 6 : 3 })} />
+            </div>
+          </Panel>
+
+          <Panel title="Available equipment" eyebrow="Training access">
+            <div className="grid grid-cols-2 gap-2">
+              {equipmentChoices.map((choice) => (
+                <button key={choice.key} onClick={() => selectEquipmentPreset(choice.key)} className={`min-h-12 rounded-lg border px-3 py-2 text-left text-sm font-black ${choice.active ? 'border-orange-300 bg-orange-500 text-black' : 'border-white/10 bg-white/10 text-zinc-200'}`}>
+                  {choice.label}
+                </button>
+              ))}
+            </div>
+          </Panel>
+
+          <Panel title="Tight areas" eyebrow="Mobility focus">
+            <div className="flex flex-wrap gap-2">
+              {painOptions.map((area) => (
+                <button key={area} onClick={() => updateProfile({ tightAreas: toggleList(profile.tightAreas ?? [], area) })} className={`rounded-full px-3 py-2 text-xs font-black ${(profile.tightAreas ?? []).includes(area) ? 'bg-emerald-400 text-black' : 'bg-white/10 text-zinc-200'}`}>
+                  {formatArea(area)}
+                </button>
+              ))}
+            </div>
+            <label className="mt-4 block rounded-lg border border-white/10 bg-black/25 p-3">
+              <span className="text-xs font-black uppercase tracking-[0.16em] text-zinc-400">Injury limitations</span>
+              <textarea value={(profile.injuryLimitations ?? []).join('\n')} onChange={(event) => updateProfile({ injuryLimitations: event.target.value ? [event.target.value] : [] })} rows={3} placeholder="List movements or areas to avoid" className="mt-2 w-full resize-none bg-transparent text-sm text-white outline-none" />
+            </label>
+          </Panel>
+
+          <Panel title="MMA and BJJ schedule" eyebrow="Sessions per week">
+            <div className="grid grid-cols-2 gap-3">
+              {(['mma', 'bjj', 'wrestling', 'striking'] as const).map((sport) => (
+                <NumberStepper key={sport} label={sport.toUpperCase()} value={profile.combatSchedule[sport]} onChange={(value) => updateProfile({ combatSchedule: { ...profile.combatSchedule, [sport]: value } })} />
+              ))}
+            </div>
+          </Panel>
+        </div>
+
+        <button onClick={completeOnboarding} className="mt-5 inline-flex h-14 w-full items-center justify-center gap-2 rounded-lg bg-orange-500 px-4 font-black text-black">
+          <CheckCircle2 className="h-5 w-5" />
+          Save setup and build my plan
+        </button>
+      </section>
+
+    </main>
   );
 }
 
@@ -1691,6 +1978,9 @@ function historyFromWorkout(workout: WorkoutSession, entry: UserFeedback): Train
     movementPatterns: Array.from(new Set(workout.exercises.map((exercise) => exercise.item.movementPattern))),
     rpe: entry.rpe,
     pain: entry.pain,
+    durationMinutes: workout.durationMinutes,
+    intensity: workout.intensity,
+    exerciseIds: workout.exercises.map((exercise) => exercise.item.id),
   };
 }
 
@@ -1714,6 +2004,9 @@ function withProfileDefaults(profile: UserProfile): UserProfile {
     equipment: profile.equipment?.length ? profile.equipment : defaultProfile.equipment,
     combatSchedule: { ...defaultProfile.combatSchedule, ...(profile.combatSchedule ?? {}) },
     painAreas: profile.painAreas ?? [],
+    tightAreas: profile.tightAreas ?? [],
+    injuryLimitations: profile.injuryLimitations ?? [],
+    onboardingComplete: profile.onboardingComplete ?? false,
   };
 }
 
@@ -1723,12 +2016,39 @@ function mapProfileRow(row: Record<string, unknown>, fallback: UserProfile): Use
   const planText = String(row.training_plan ?? row.split_plan ?? fallback.trainingPlan).toLowerCase();
   return {
     ...fallback,
-    goal: goalText.includes('strength') ? 'strength' : goalText.includes('muscle') ? 'muscle' : goalText.includes('fat') ? 'fat_loss' : goalText.includes('endurance') ? 'endurance' : goalText.includes('mobility') ? 'mobility' : goalText.includes('mma') || goalText.includes('bjj') ? 'mma_bjj' : fallback.goal,
-    trainingPlan: planText.includes('upper') ? 'upper_lower' : planText.includes('full') ? 'full_body' : planText.includes('mobility') ? 'mobility_only' : planText.includes('mma') || planText.includes('bjj') ? 'mma_bjj_athletic' : 'push_pull_legs',
+    goal: goalText.includes('strength') ? 'strength' : goalText.includes('muscle') ? 'muscle' : goalText.includes('fat') ? 'fat_loss' : goalText.includes('endurance') ? 'endurance' : goalText.includes('recovery') ? 'recovery' : goalText.includes('mobility') ? 'mobility' : goalText.includes('mma') || goalText.includes('bjj') ? 'mma_bjj' : fallback.goal,
+    trainingPlan: planText.includes('hybrid') ? 'hybrid' : planText.includes('upper') ? 'upper_lower' : planText.includes('full') ? 'full_body' : planText.includes('mobility') ? 'mobility_only' : planText.includes('mma') || planText.includes('bjj') ? 'mma_bjj_athletic' : 'push_pull_legs',
     experienceLevel: experienceText.includes('beginner') ? 'beginner' : experienceText.includes('advanced') ? 'advanced' : experienceText.includes('competitive') ? 'competitive' : 'intermediate',
     equipment: Array.isArray(row.equipment_profile) ? row.equipment_profile as string[] : fallback.equipment,
     painAreas: Array.isArray(row.limitations) ? mapLimitationsToPain(row.limitations as string[]) : fallback.painAreas,
+    tightAreas: Array.isArray(row.tight_areas) ? row.tight_areas as MobilityArea[] : fallback.tightAreas,
+    injuryLimitations: Array.isArray(row.limitations) ? row.limitations as string[] : fallback.injuryLimitations,
+    onboardingComplete: Boolean(row.profile_completed ?? fallback.onboardingComplete),
   };
+}
+
+function countWithinDays(dates: string[], days: number) {
+  const cutoff = Date.now() - days * 86400000;
+  return dates.filter((date) => new Date(date).getTime() >= cutoff).length;
+}
+
+function calculateConsistency(dates: string[]) {
+  const completedDays = new Set(dates.map((value) => new Date(value).toISOString().slice(0, 10)));
+  let streak = 0;
+  const cursor = new Date();
+  for (let index = 0; index < 365; index += 1) {
+    const key = cursor.toISOString().slice(0, 10);
+    if (!completedDays.has(key)) {
+      if (index === 0) {
+        cursor.setDate(cursor.getDate() - 1);
+        continue;
+      }
+      break;
+    }
+    streak += 1;
+    cursor.setDate(cursor.getDate() - 1);
+  }
+  return streak;
 }
 
 function mapLimitationsToPain(limitations: string[]): MobilityArea[] {

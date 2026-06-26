@@ -5,13 +5,15 @@ export type TrainingGoal =
   | 'athleticism'
   | 'mma_bjj'
   | 'mobility'
+  | 'recovery'
   | 'endurance';
 
 export type ExperienceLevel = 'beginner' | 'intermediate' | 'advanced' | 'competitive';
 export type Difficulty = 'beginner' | 'intermediate' | 'advanced';
 export type VideoType = 'youtube' | 'local' | 'external';
-export type TrainingPlanType = 'push_pull_legs' | 'upper_lower' | 'full_body' | 'mma_bjj_athletic' | 'mobility_only';
+export type TrainingPlanType = 'push_pull_legs' | 'upper_lower' | 'full_body' | 'mma_bjj_athletic' | 'hybrid' | 'mobility_only';
 export type WorkoutSplitType = 'push' | 'pull' | 'legs' | 'upper' | 'lower' | 'full_body' | 'mma_bjj' | 'mobility_only' | 'recovery' | 'rest';
+export type WorkoutIntensity = 'easy' | 'medium' | 'hard';
 
 export type MovementPattern =
   | 'push'
@@ -42,7 +44,8 @@ export type MobilityArea =
   | 'knees'
   | 'elbows'
   | 'glutes'
-  | 'quads';
+  | 'quads'
+  | 'calves';
 
 export type MobilitySessionMode = 'pre_workout' | 'post_workout' | 'recovery_day';
 export type MobilityPhase = 'dynamic' | 'main' | 'static' | 'foam_roll' | 'breathing';
@@ -82,9 +85,12 @@ export type UserProfile = {
   sorenessLevel: number;
   readinessLevel: number;
   painAreas: MobilityArea[];
+  tightAreas?: MobilityArea[];
+  injuryLimitations?: string[];
   experienceLevel: ExperienceLevel;
   workoutLength: number;
   mobilityMinutes: number;
+  onboardingComplete?: boolean;
 };
 
 export type CalibrationTestKey =
@@ -140,6 +146,9 @@ export type ExerciseLibraryItem = MediaFields & {
   sportTags: string[];
   avoidWithPain?: MobilityArea[];
   substitutions: string[];
+  easierAlternative: string;
+  harderAlternative: string;
+  injuryWarnings: string[];
 };
 
 export type StretchLibraryItem = MediaFields & {
@@ -155,6 +164,10 @@ export type StretchLibraryItem = MediaFields & {
   equipment: string[];
   difficulty: Difficulty;
   sportTags: string[];
+  whenToUse: string;
+  easierAlternative: string;
+  harderAlternative: string;
+  injuryWarnings: string[];
 };
 
 export type WorkoutExercise = {
@@ -175,6 +188,7 @@ export type WorkoutSession = {
   focus: string;
   workoutType: WorkoutSplitType;
   durationMinutes: number;
+  intensity: WorkoutIntensity;
   readinessAdjustment: string;
   recommendationReason: string;
   missedDays: number;
@@ -183,12 +197,15 @@ export type WorkoutSession = {
   patternBalance: Record<MovementPattern, number>;
   exercises: WorkoutExercise[];
   mobilitySteps: MobilitySessionStep[];
+  generationIndex: number;
 };
 
 export type MobilitySessionStep = {
   item: StretchLibraryItem;
   phase: MobilityPhase;
   seconds: number;
+  sets: number;
+  reps?: string;
   reason: string;
 };
 
@@ -202,6 +219,7 @@ export type MobilitySession = {
   steps: MobilitySessionStep[];
   recommendationReason: string;
   progressionNote: string;
+  generationIndex: number;
 };
 
 export type UserFeedback = {
@@ -224,6 +242,9 @@ export type TrainingHistoryItem = {
   movementPatterns: MovementPattern[];
   rpe: number;
   pain: boolean;
+  durationMinutes?: number;
+  intensity?: WorkoutIntensity;
+  exerciseIds?: string[];
 };
 
 export type MobilityHistoryItem = {
