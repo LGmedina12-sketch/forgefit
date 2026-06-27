@@ -87,9 +87,10 @@ export function patternsForWorkoutType(type: WorkoutSplitType, goal: TrainingGoa
   if (type === 'recovery' || type === 'rest') return ['core', 'mobility', 'conditioning'];
 
   const combatLoad = combatSchedule.mma + combatSchedule.bjj + combatSchedule.wrestling + combatSchedule.striking;
-  if (goal === 'strength') return ['squat', 'hinge', 'push', 'pull', 'core', 'carry', 'conditioning'];
-  if (goal === 'muscle') return ['push', 'pull', 'squat', 'hinge', 'core', 'carry', 'conditioning'];
+  if (goal === 'strength') return ['squat', 'hinge', 'push', 'pull', 'core', 'carry'];
+  if (goal === 'muscle') return ['push', 'pull', 'squat', 'hinge', 'core', 'carry'];
   if (goal === 'fat_loss') return ['conditioning', 'squat', 'push', 'pull', 'hinge', 'core', 'carry'];
+  if (goal === 'conditioning') return ['conditioning', 'carry', 'core', 'squat', 'hinge', 'push', 'pull'];
   if (goal === 'endurance') return ['conditioning', 'carry', 'core', 'squat', 'pull', 'push'];
   if (goal === 'mobility') return ['core', 'squat', 'hinge', 'rotation', 'push', 'pull'];
   if (goal === 'mma_bjj' || combatLoad > 1) return ['power', 'rotation', 'pull', 'hinge', 'core', 'conditioning', 'push', 'squat'];

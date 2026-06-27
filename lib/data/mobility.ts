@@ -1,6 +1,6 @@
 import type { MediaFields, StretchLibraryItem, VideoType } from '@/lib/training/types';
 
-type StretchSeed = Omit<StretchLibraryItem, keyof MediaFields | 'description' | 'whenToUse' | 'easierAlternative' | 'harderAlternative' | 'injuryWarnings'> & {
+type StretchSeed = Omit<StretchLibraryItem, keyof MediaFields | 'description' | 'whenToUse' | 'easierAlternative' | 'harderAlternative' | 'injuryWarnings' | 'isMmaSpecific'> & {
   description?: string;
   videoUrl?: string;
   thumbnailUrl?: string;
@@ -9,6 +9,7 @@ type StretchSeed = Omit<StretchLibraryItem, keyof MediaFields | 'description' | 
   easierAlternative?: string;
   harderAlternative?: string;
   injuryWarnings?: string[];
+  isMmaSpecific?: boolean;
 };
 
 const stretchVideos: Record<string, string> = {
@@ -32,6 +33,7 @@ function stretch(item: StretchSeed): StretchLibraryItem {
     easierAlternative: item.easierAlternative ?? '',
     harderAlternative: item.harderAlternative ?? '',
     injuryWarnings: item.injuryWarnings ?? [],
+    isMmaSpecific: item.isMmaSpecific ?? item.category === 'MMA/BJJ mobility',
   };
 }
 
@@ -310,6 +312,7 @@ type QuickStretch = {
   easier?: string;
   harder?: string;
   warning?: string;
+  mmaSpecific?: boolean;
 };
 
 function quickStretch(seed: QuickStretch): StretchLibraryItem {
@@ -329,6 +332,7 @@ function quickStretch(seed: QuickStretch): StretchLibraryItem {
     easierAlternative: seed.easier ?? '',
     harderAlternative: seed.harder ?? '',
     injuryWarnings: seed.warning ? [seed.warning] : [],
+    isMmaSpecific: seed.mmaSpecific ?? Boolean(seed.sport?.length),
   });
 }
 

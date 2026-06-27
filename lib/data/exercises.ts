@@ -1,6 +1,6 @@
 import type { ExerciseLibraryItem, MediaFields, TrainingGoal, VideoType } from '@/lib/training/types';
 
-type ExerciseSeed = Omit<ExerciseLibraryItem, keyof MediaFields | 'description' | 'easierAlternative' | 'harderAlternative' | 'injuryWarnings'> & {
+type ExerciseSeed = Omit<ExerciseLibraryItem, keyof MediaFields | 'description' | 'easierAlternative' | 'harderAlternative' | 'injuryWarnings' | 'intensity' | 'workoutTypes' | 'isMainLift' | 'isAccessory' | 'isConditioning' | 'isMmaSpecific'> & {
   description?: string;
   videoUrl?: string;
   thumbnailUrl?: string;
@@ -8,6 +8,12 @@ type ExerciseSeed = Omit<ExerciseLibraryItem, keyof MediaFields | 'description' 
   easierAlternative?: string;
   harderAlternative?: string;
   injuryWarnings?: string[];
+  intensity?: ExerciseLibraryItem['intensity'];
+  workoutTypes?: ExerciseLibraryItem['workoutTypes'];
+  isMainLift?: boolean;
+  isAccessory?: boolean;
+  isConditioning?: boolean;
+  isMmaSpecific?: boolean;
 };
 
 const exerciseVideos: Record<string, string> = {
@@ -19,9 +25,21 @@ const exerciseVideos: Record<string, string> = {
 
 const baseGoals: TrainingGoal[] = ['strength', 'muscle', 'fat_loss', 'athleticism'];
 
+const accessoryIds = new Set([
+  'tricep-extension', 'lateral-raise', 'front-raise', 'face-pull', 'rear-delt-fly', 'hammer-curl', 'bicep-curl',
+  'dead-hang', 'scapular-pull-up', 'band-pull-apart', 'calf-raise', 'wall-sit', 'plank', 'side-plank', 'dead-bug', 'hollow-hold',
+  'leg-raise', 'hanging-knee-raise', 'russian-twist', 'bird-dog', 'pallof-press', 'ab-wheel', 'neck-isometric',
+]);
+
+const mmaSpecificIds = new Set([
+  'sprawl-to-shot', 'sprawl', 'shrimping', 'technical-stand-up', 'shot-entry', 'penetration-step', 'hip-escape',
+  'bridge-and-roll', 'shadow-boxing', 'footwork-drill', 'sprawl-to-push-up', 'combat-base-transition',
+]);
+
 function exercise(item: ExerciseSeed): ExerciseLibraryItem {
   const videoUrl = item.videoUrl ?? exerciseVideos[item.id] ?? '';
   const videoType = item.videoType ?? (videoUrl.includes('youtube.com') || videoUrl.includes('youtu.be') ? 'youtube' : 'external');
+  const isConditioning = item.isConditioning ?? item.movementPattern === 'conditioning';
 
   return {
     ...item,
@@ -30,10 +48,37 @@ function exercise(item: ExerciseSeed): ExerciseLibraryItem {
     thumbnailUrl: item.thumbnailUrl ?? '',
     videoType,
     videoAvailable: Boolean(videoUrl),
+    goalTags: Array.from(new Set([...item.goalTags, ...(isConditioning ? ['conditioning' as const] : [])])),
     easierAlternative: item.easierAlternative ?? item.substitutions[0] ?? '',
     harderAlternative: item.harderAlternative ?? item.substitutions[1] ?? '',
     injuryWarnings: item.injuryWarnings ?? (item.avoidWithPain?.length ? [`Avoid or modify with ${item.avoidWithPain.join(', ')} pain.`] : []),
+    intensity: item.intensity ?? inferIntensity(item),
+    workoutTypes: item.workoutTypes ?? inferWorkoutTypes(item.movementPattern),
+    isMainLift: item.isMainLift ?? inferMainLift(item),
+    isAccessory: item.isAccessory ?? accessoryIds.has(item.id),
+    isConditioning,
+    isMmaSpecific: item.isMmaSpecific ?? mmaSpecificIds.has(item.id),
   };
+}
+
+function inferIntensity(item: ExerciseSeed): ExerciseLibraryItem['intensity'] {
+  if (item.difficulty === 'advanced' || ['conditioning', 'power'].includes(item.movementPattern)) return 'hard';
+  if (item.difficulty === 'beginner') return 'easy';
+  return 'medium';
+}
+
+function inferMainLift(item: ExerciseSeed) {
+  if (accessoryIds.has(item.id) || ['conditioning', 'power', 'core', 'carry', 'rotation', 'mobility', 'neck'].includes(item.movementPattern)) return false;
+  return item.category.includes('strength') || item.category.includes('hypertrophy') || item.category.includes('posterior') || ['push', 'pull', 'squat', 'hinge', 'lunge'].includes(item.movementPattern);
+}
+
+function inferWorkoutTypes(pattern: ExerciseLibraryItem['movementPattern']): ExerciseLibraryItem['workoutTypes'] {
+  if (pattern === 'push') return ['push', 'upper', 'full_body'];
+  if (pattern === 'pull') return ['pull', 'upper', 'full_body'];
+  if (['squat', 'hinge', 'lunge'].includes(pattern)) return ['legs', 'lower', 'full_body'];
+  if (pattern === 'conditioning' || pattern === 'power') return ['conditioning', 'full_body'];
+  if (pattern === 'mobility') return ['mobility'];
+  return ['core', 'full_body'];
 }
 
 const baseExerciseLibrary: ExerciseLibraryItem[] = [
@@ -448,6 +493,12 @@ type QuickExercise = {
   avoid?: ExerciseLibraryItem['avoidWithPain'];
   easier?: string;
   harder?: string;
+  intensity?: ExerciseLibraryItem['intensity'];
+  workoutTypes?: ExerciseLibraryItem['workoutTypes'];
+  main?: boolean;
+  accessory?: boolean;
+  conditioning?: boolean;
+  mmaSpecific?: boolean;
 };
 
 function quickExercise(seed: QuickExercise): ExerciseLibraryItem {
@@ -469,10 +520,17 @@ function quickExercise(seed: QuickExercise): ExerciseLibraryItem {
     substitutions,
     easierAlternative: seed.easier ?? '',
     harderAlternative: seed.harder ?? '',
+    intensity: seed.intensity,
+    workoutTypes: seed.workoutTypes,
+    isMainLift: seed.main,
+    isAccessory: seed.accessory,
+    isConditioning: seed.conditioning,
+    isMmaSpecific: seed.mmaSpecific,
   });
 }
 
 const requestedExerciseLibrary: ExerciseLibraryItem[] = [
+  quickExercise({ id: 'weighted-push-up', name: 'Weighted Push-Up', pattern: 'push', muscles: ['chest', 'triceps', 'shoulders', 'core'], equipment: ['dumbbell', 'gym equipment'], difficulty: 'intermediate', goals: ['strength', 'muscle'], easier: 'push-up', harder: 'dumbbell-bench-press', main: true, avoid: ['shoulders', 'wrists'] }),
   quickExercise({ id: 'decline-push-up', name: 'Decline Push-Up', pattern: 'push', muscles: ['chest', 'triceps', 'shoulders', 'core'], difficulty: 'intermediate', easier: 'push-up', harder: 'explosive-push-up', avoid: ['shoulders', 'wrists'] }),
   quickExercise({ id: 'diamond-push-up', name: 'Diamond Push-Up', pattern: 'push', muscles: ['triceps', 'chest', 'shoulders'], difficulty: 'intermediate', easier: 'push-up', harder: 'decline-push-up', avoid: ['wrists', 'elbows'] }),
   quickExercise({ id: 'explosive-push-up', name: 'Explosive Push-Up', pattern: 'power', muscles: ['chest', 'triceps', 'shoulders', 'core'], difficulty: 'advanced', goals: ['athleticism', 'mma_bjj', 'strength'], sport: ['mma', 'bjj', 'wrestling'], easier: 'push-up', avoid: ['shoulders', 'wrists'] }),
@@ -496,6 +554,7 @@ const requestedExerciseLibrary: ExerciseLibraryItem[] = [
   quickExercise({ id: 'towel-row', name: 'Towel Row', pattern: 'pull', muscles: ['upper back', 'biceps', 'forearms'], equipment: ['towel', 'bodyweight'], easier: 'band-row', harder: 'inverted-row' }),
   quickExercise({ id: 'band-pull-apart', name: 'Band Pull-Apart', pattern: 'pull', muscles: ['upper back', 'rear delts'], equipment: ['resistance band'], easier: 'scapular-pull-up', harder: 'face-pull' }),
   quickExercise({ id: 'forward-lunge', name: 'Forward Lunge', pattern: 'lunge', muscles: ['quads', 'glutes', 'hamstrings'], easier: 'reverse-lunge', harder: 'bulgarian-split-squat', avoid: ['knees'] }),
+  quickExercise({ id: 'split-squat', name: 'Split Squat', pattern: 'lunge', muscles: ['quads', 'glutes', 'hamstrings'], easier: 'reverse-lunge', harder: 'bulgarian-split-squat', main: true, avoid: ['knees'] }),
   quickExercise({ id: 'bulgarian-split-squat', name: 'Bulgarian Split Squat', pattern: 'lunge', muscles: ['quads', 'glutes', 'hamstrings'], equipment: ['bodyweight', 'dumbbell', 'bench'], difficulty: 'advanced', easier: 'reverse-lunge', harder: 'bulgarian-split-squat', avoid: ['knees'] }),
   quickExercise({ id: 'step-up', name: 'Step-Up', pattern: 'lunge', muscles: ['quads', 'glutes', 'hamstrings'], equipment: ['box', 'bench', 'bodyweight'], easier: 'reverse-lunge', harder: 'bulgarian-split-squat', avoid: ['knees'] }),
   quickExercise({ id: 'glute-bridge', name: 'Glute Bridge', pattern: 'hinge', muscles: ['glutes', 'hamstrings', 'core'], easier: 'bodyweight-squat', harder: 'hip-thrust', avoid: ['lower_back'] }),

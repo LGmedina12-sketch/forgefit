@@ -6,6 +6,7 @@ export type TrainingGoal =
   | 'mma_bjj'
   | 'mobility'
   | 'recovery'
+  | 'conditioning'
   | 'endurance';
 
 export type ExperienceLevel = 'beginner' | 'intermediate' | 'advanced' | 'competitive';
@@ -14,6 +15,7 @@ export type VideoType = 'youtube' | 'local' | 'external';
 export type TrainingPlanType = 'push_pull_legs' | 'upper_lower' | 'full_body' | 'mma_bjj_athletic' | 'hybrid' | 'mobility_only';
 export type WorkoutSplitType = 'push' | 'pull' | 'legs' | 'upper' | 'lower' | 'full_body' | 'mma_bjj' | 'mobility_only' | 'recovery' | 'rest';
 export type WorkoutIntensity = 'easy' | 'medium' | 'hard';
+export type ExerciseWorkoutType = 'push' | 'pull' | 'legs' | 'upper' | 'lower' | 'full_body' | 'core' | 'mobility' | 'conditioning';
 
 export type MovementPattern =
   | 'push'
@@ -142,13 +144,19 @@ export type ExerciseLibraryItem = MediaFields & {
   musclesWorked: string[];
   equipment: string[];
   difficulty: Difficulty;
+  intensity: WorkoutIntensity;
   goalTags: TrainingGoal[];
+  workoutTypes: ExerciseWorkoutType[];
   sportTags: string[];
   avoidWithPain?: MobilityArea[];
   substitutions: string[];
   easierAlternative: string;
   harderAlternative: string;
   injuryWarnings: string[];
+  isMainLift: boolean;
+  isAccessory: boolean;
+  isConditioning: boolean;
+  isMmaSpecific: boolean;
 };
 
 export type StretchLibraryItem = MediaFields & {
@@ -168,6 +176,7 @@ export type StretchLibraryItem = MediaFields & {
   easierAlternative: string;
   harderAlternative: string;
   injuryWarnings: string[];
+  isMmaSpecific: boolean;
 };
 
 export type WorkoutExercise = {
@@ -194,6 +203,7 @@ export type WorkoutSession = {
   missedDays: number;
   planLabel: string;
   safetyNote: string;
+  limitedMatchMessage: string;
   patternBalance: Record<MovementPattern, number>;
   exercises: WorkoutExercise[];
   mobilitySteps: MobilitySessionStep[];

@@ -48,6 +48,14 @@ export type GenerateMobilityInput = {
 const patternDefaults: MovementPattern[] = ['push', 'pull', 'squat', 'hinge', 'core', 'carry', 'rotation', 'conditioning'];
 const combatSports = ['mma', 'bjj', 'wrestling'];
 
+type GoalPolicy = {
+  allowedGoalTags: TrainingGoal[];
+  allowConditioning: boolean;
+  allowMmaExercises: boolean;
+  allowMmaMobility: boolean;
+  maxMmaExercises: number;
+};
+
 const goalLabels: Record<TrainingGoal, string> = {
   strength: 'Strength',
   muscle: 'Muscle',
@@ -56,6 +64,7 @@ const goalLabels: Record<TrainingGoal, string> = {
   mma_bjj: 'MMA/BJJ support',
   mobility: 'Mobility',
   recovery: 'Recovery',
+  conditioning: 'Conditioning',
   endurance: 'Endurance',
 };
 
@@ -190,17 +199,22 @@ export function generateWorkoutPlan(input: GenerateWorkoutInput): WorkoutSession
   const recentFeedback = input.feedback.slice(0, 3);
   const painAreas = Array.from(new Set([...input.profile.painAreas, ...recentFeedback.flatMap((item) => item.painAreas)]));
   const injuryText = (input.profile.injuryLimitations ?? []).join(' ').toLowerCase();
-  const targetPatterns = patternsForWorkoutType(recommendation.workoutType, input.profile.goal, input.profile.combatSchedule);
+  const policy = getGoalPolicy(input.profile);
+  const scheduledPatterns = patternsForWorkoutType(recommendation.workoutType, input.profile.goal, input.profile.combatSchedule);
+  const targetPatterns = policy.allowConditioning
+    ? scheduledPatterns
+    : scheduledPatterns.filter((pattern) => pattern !== 'conditioning');
   const readinessPenalty = input.profile.readinessLevel < 55 || input.profile.sorenessLevel > 7;
   const recoveryDay = recommendation.workoutType === 'recovery' || recommendation.workoutType === 'mobility_only';
   const restDay = recommendation.workoutType === 'rest';
   const durationMinutes = normalizeDuration(input.profile.workoutLength);
   const count = restDay ? 0 : recoveryDay ? Math.min(5, workoutExerciseCount(durationMinutes)) : workoutExerciseCount(durationMinutes);
   const intensity = getWorkoutIntensity(input.profile, recommendation.workoutType, input.feedback);
-  const scored = library
+  // Eligibility is a hard gate. Scoring and regeneration can only work inside this goal/split-safe pool.
+  const eligibleLibrary = library
     .filter((item) => hasEquipment(item.equipment, safeEquipment))
-    .filter((item) => !(difficulty === 'beginner' && item.difficulty === 'advanced'))
-    .filter((item) => !isBlockedByInjury(item, painAreas, injuryText))
+    .filter((item) => isExerciseEligible(item, input.profile, recommendation.workoutType, difficulty, painAreas, injuryText, policy));
+  const scored = eligibleLibrary
     .map((item) => ({
       item,
       score: scoreExercise(item, {
@@ -214,27 +228,28 @@ export function generateWorkoutPlan(input: GenerateWorkoutInput): WorkoutSession
         injuryText,
       }),
     }))
-    .filter((entry) => entry.score > -50)
     .sort((a, b) => b.score - a.score || a.item.name.localeCompare(b.item.name));
 
-  const chosen: ExerciseLibraryItem[] = [];
-  const phases = restDay ? [] : workoutPhasePlan(count, recoveryDay);
+  const chosen: { item: ExerciseLibraryItem; phase: ExercisePhase }[] = [];
+  const phases = restDay ? [] : workoutPhasePlan(count, recoveryDay, policy.allowConditioning);
 
   // Regeneration rotates through the best-scoring candidates inside each required phase instead of randomizing the plan.
   phases.forEach((phase, index) => {
     const phaseIndex = phases.slice(0, index).filter((item) => item === phase).length;
-    const wanted = wantedPatternForPhase(phase, targetPatterns, phaseIndex);
-    const pool = scored.filter(({ item }) => !chosen.some((picked) => picked.id === item.id));
+    const wanted = wantedPatternForPhase(phase, targetPatterns, phaseIndex, recommendation.workoutType);
+    const mmaCount = chosen.filter((picked) => picked.item.isMmaSpecific).length;
+    const pool = scored
+      .filter(({ item }) => !chosen.some((picked) => picked.item.id === item.id))
+      .filter(({ item }) => !item.isMmaSpecific || mmaCount < policy.maxMmaExercises);
     const preferred = pool.filter(({ item }) => phaseMatches(item, phase, wanted));
-    const candidates = (preferred.length ? preferred : pool).slice(0, 6);
+    const fallback = pool.filter(({ item }) => fallbackPhaseMatches(item, phase, wanted));
+    const candidates = (preferred.length ? preferred : fallback).slice(0, 6);
     const picked = candidates.length ? candidates[(generationIndex + index) % candidates.length].item : undefined;
-    if (picked) chosen.push(prepareExerciseForEquipment(picked, safeEquipment));
+    if (picked) chosen.push({ item: prepareExerciseForEquipment(picked, safeEquipment), phase });
   });
 
-  const exercises = chosen.map((item, index): WorkoutExercise => {
-    const phase = phases[index] ?? 'accessory';
-    return prescribeExercise(item, phase, input.profile, difficulty, recentFeedback, input.history.length);
-  });
+  const exercises = chosen.map(({ item, phase }): WorkoutExercise =>
+    prescribeExercise(item, phase, input.profile, difficulty, recentFeedback, input.history.length, recoveryDay));
 
   const mobilitySteps = generateMobilityPlan({
     profile: input.profile,
@@ -266,6 +281,9 @@ export function generateWorkoutPlan(input: GenerateWorkoutInput): WorkoutSession
     safetyNote: lowered
       ? 'Pain or low readiness detected: use clean reps, stop sharp pain, and swap anything that feels wrong.'
       : 'No max effort required today. Keep 1-3 reps in reserve unless a coach tells you otherwise.',
+    limitedMatchMessage: exercises.length < count
+      ? `Limited matching exercises for this goal, split, equipment, and recovery level. The session was reduced to ${exercises.length} safe matches.`
+      : '',
     patternBalance,
     exercises,
     mobilitySteps,
@@ -287,14 +305,22 @@ export function generateMobilityPlan(input: GenerateMobilityInput): MobilitySess
   const used = new Set<string>();
   const recentDrillIds = new Set((input.mobilityHistory ?? []).slice(0, 3).flatMap((entry) => entry.drillIds));
   const injuryText = (input.profile.injuryLimitations ?? []).join(' ').toLowerCase();
+  const policy = getGoalPolicy(input.profile);
+  const eligibleLibrary = library
+    .filter((item) => hasEquipment(item.equipment, input.profile.equipment))
+    .filter((item) => !(input.profile.experienceLevel === 'beginner' && item.difficulty === 'advanced'))
+    .filter((item) => !isStretchBlockedByInjury(item, injuryText))
+    .filter((item) => !item.isMmaSpecific || policy.allowMmaMobility);
 
   // Recent drills receive a repeat penalty, while tight or sore target areas can still justify a needed repeat.
   const steps = phases.map((phase, index): MobilitySessionStep | null => {
-    const pool = library
+    const available = eligibleLibrary
       .filter((item) => !used.has(item.id))
-      .filter((item) => hasEquipment(item.equipment, input.profile.equipment))
-      .filter((item) => !(input.profile.experienceLevel === 'beginner' && item.difficulty === 'advanced'))
-      .filter((item) => !isStretchBlockedByInjury(item, injuryText))
+      .filter((item) => phase === 'breathing' ? item.phase === 'breathing' : item.phase === phase);
+    const fallback = eligibleLibrary
+      .filter((item) => !used.has(item.id))
+      .filter((item) => mobilityPhaseMatches(item, phase));
+    const pool = (available.length ? available : fallback)
       .map((item) => ({
         item,
         score: scoreStretch(item, phase, targetAreas, input.profile, input.feedback, index, recentDrillIds),
@@ -324,7 +350,7 @@ export function generateMobilityPlan(input: GenerateMobilityInput): MobilitySess
     targetAreas,
     scoreSummary: summarizeScoreTargets(input.mobilityScores, targetAreas),
     steps,
-    recommendationReason: `Targets ${labelAreaList(targetAreas.slice(0, 4))} from tight areas, scores, recent workouts, and MMA/BJJ needs.`,
+    recommendationReason: `Targets ${labelAreaList(targetAreas.slice(0, 4))} from tight areas, scores, and recent workouts${policy.allowMmaMobility ? ', with MMA/BJJ needs included' : ''}.`,
     progressionNote: completedMobilityCount >= 10
       ? 'Progression: longer holds, extra sets, and harder active variations where control is strong.'
       : completedMobilityCount >= 4
@@ -382,6 +408,139 @@ export function adjustDifficulty(profile: UserProfile, feedback: UserFeedback[])
   return 'intermediate';
 }
 
+function getGoalPolicy(profile: UserProfile): GoalPolicy {
+  const combatPlan = profile.trainingPlan === 'hybrid' || profile.trainingPlan === 'mma_bjj_athletic';
+
+  if (profile.goal === 'recovery') {
+    return {
+      allowedGoalTags: ['recovery', 'mobility'],
+      allowConditioning: false,
+      allowMmaExercises: false,
+      allowMmaMobility: false,
+      maxMmaExercises: 0,
+    };
+  }
+
+  if (profile.goal === 'mobility') {
+    return {
+      allowedGoalTags: ['mobility', 'recovery'],
+      allowConditioning: false,
+      allowMmaExercises: combatPlan,
+      allowMmaMobility: combatPlan,
+      maxMmaExercises: combatPlan ? 2 : 0,
+    };
+  }
+
+  if (profile.goal === 'mma_bjj') {
+    return {
+      allowedGoalTags: ['mma_bjj', 'athleticism', 'strength', 'conditioning', 'mobility'],
+      allowConditioning: true,
+      allowMmaExercises: true,
+      allowMmaMobility: true,
+      maxMmaExercises: 3,
+    };
+  }
+
+  if (profile.goal === 'athleticism') {
+    return {
+      allowedGoalTags: ['athleticism', 'strength', 'conditioning'],
+      allowConditioning: true,
+      allowMmaExercises: true,
+      allowMmaMobility: true,
+      maxMmaExercises: 2,
+    };
+  }
+
+  if (profile.goal === 'conditioning') {
+    return {
+      allowedGoalTags: ['conditioning', 'endurance', 'fat_loss', 'athleticism'],
+      allowConditioning: true,
+      allowMmaExercises: true,
+      allowMmaMobility: false,
+      maxMmaExercises: 2,
+    };
+  }
+
+  if (profile.goal === 'fat_loss') {
+    return {
+      allowedGoalTags: combatPlan
+        ? ['fat_loss', 'conditioning', 'athleticism', 'mma_bjj']
+        : ['fat_loss', 'conditioning'],
+      allowConditioning: true,
+      allowMmaExercises: combatPlan,
+      allowMmaMobility: combatPlan,
+      maxMmaExercises: combatPlan ? 2 : 0,
+    };
+  }
+
+  if (profile.goal === 'endurance') {
+    return {
+      allowedGoalTags: combatPlan
+        ? ['endurance', 'conditioning', 'fat_loss', 'athleticism', 'mma_bjj']
+        : ['endurance', 'conditioning', 'fat_loss'],
+      allowConditioning: true,
+      allowMmaExercises: combatPlan,
+      allowMmaMobility: combatPlan,
+      maxMmaExercises: combatPlan ? 2 : 0,
+    };
+  }
+
+  const primaryGoal: TrainingGoal = profile.goal === 'muscle' ? 'muscle' : 'strength';
+  return {
+    allowedGoalTags: combatPlan
+      ? [primaryGoal, 'strength', 'athleticism', 'conditioning', 'mma_bjj']
+      : [primaryGoal],
+    allowConditioning: combatPlan,
+    allowMmaExercises: combatPlan,
+    allowMmaMobility: combatPlan,
+    maxMmaExercises: combatPlan ? 3 : 0,
+  };
+}
+
+function isExerciseEligible(
+  item: ExerciseLibraryItem,
+  profile: UserProfile,
+  workoutType: WorkoutSession['workoutType'],
+  difficulty: 'beginner' | 'intermediate' | 'advanced',
+  painAreas: MobilityArea[],
+  injuryText: string,
+  policy: GoalPolicy,
+) {
+  if (workoutType === 'rest') return false;
+  if (difficulty === 'beginner' && item.difficulty === 'advanced') return false;
+  if (isBlockedByInjury(item, painAreas, injuryText)) return false;
+  if (item.isMmaSpecific && !policy.allowMmaExercises) return false;
+  if (item.isConditioning && !policy.allowConditioning && !item.goalTags.includes('recovery')) return false;
+
+  const recoveryLimited = profile.sorenessLevel >= 8 || profile.readinessLevel < 50;
+  if (recoveryLimited && item.intensity === 'hard') return false;
+
+  const recoverySession = workoutType === 'recovery' || workoutType === 'mobility_only' || profile.goal === 'recovery';
+  if (recoverySession) {
+    const recoveryMovement = ['core', 'mobility'].includes(item.movementPattern)
+      || (item.isConditioning && item.goalTags.includes('recovery'));
+    const recoveryTag = item.goalTags.some((goal) => goal === 'recovery' || goal === 'mobility');
+    return item.intensity === 'easy'
+      && !item.isMmaSpecific
+      && !item.isMainLift
+      && (recoveryMovement || recoveryTag);
+  }
+
+  if (profile.goal === 'mobility') {
+    const mobilitySafe = item.goalTags.includes('mobility') || ['core', 'mobility'].includes(item.movementPattern);
+    return mobilitySafe && item.intensity !== 'hard' && !item.isConditioning;
+  }
+
+  if (!item.goalTags.some((goal) => policy.allowedGoalTags.includes(goal))) return false;
+
+  if (workoutType === 'mma_bjj' || workoutType === 'full_body') return true;
+  if (item.workoutTypes.includes('core') || item.movementPattern === 'mobility') return true;
+  if (policy.allowConditioning && ['conditioning', 'power'].includes(item.movementPattern)) return true;
+
+  const splitType = workoutType === 'legs' ? 'legs' : workoutType;
+  return item.workoutTypes.includes(splitType as ExerciseLibraryItem['workoutTypes'][number]);
+}
+
 function scoreExercise(
   item: ExerciseLibraryItem,
   context: {
@@ -399,6 +558,7 @@ function scoreExercise(
   if (item.goalTags.includes(context.goal)) score += 35;
   if (context.targetPatterns.includes(item.movementPattern)) score += 28;
   if (context.goal === 'mma_bjj' && item.sportTags.some((tag) => combatSports.includes(tag))) score += 24;
+  if (context.goal === 'mma_bjj' && item.isMmaSpecific) score += 30;
   if (context.goal === 'endurance' && item.movementPattern === 'conditioning') score += 22;
   if (context.goal === 'athleticism' && ['power', 'carry', 'rotation', 'conditioning'].includes(item.movementPattern)) score += 18;
   if (item.difficulty === context.difficulty) score += 12;
@@ -439,29 +599,87 @@ function scoreStretch(
 
 function choosePatternPlan(goal: TrainingGoal, combatSchedule: UserProfile['combatSchedule']): MovementPattern[] {
   const combatLoad = combatSchedule.mma + combatSchedule.bjj + combatSchedule.wrestling + combatSchedule.striking;
-  if (goal === 'strength') return ['squat', 'hinge', 'push', 'pull', 'core', 'carry', 'conditioning'];
-  if (goal === 'muscle') return ['push', 'pull', 'squat', 'hinge', 'core', 'carry', 'conditioning'];
+  if (goal === 'strength') return ['squat', 'hinge', 'push', 'pull', 'core', 'carry'];
+  if (goal === 'muscle') return ['push', 'pull', 'squat', 'hinge', 'core', 'carry'];
   if (goal === 'fat_loss') return ['conditioning', 'squat', 'push', 'pull', 'hinge', 'core', 'carry'];
+  if (goal === 'conditioning') return ['conditioning', 'carry', 'core', 'squat', 'hinge', 'push', 'pull'];
   if (goal === 'endurance') return ['conditioning', 'carry', 'core', 'squat', 'pull', 'push'];
   if (goal === 'mobility') return ['core', 'squat', 'hinge', 'rotation', 'push', 'pull'];
   if (goal === 'mma_bjj' || combatLoad > 1) return ['power', 'rotation', 'pull', 'hinge', 'core', 'conditioning', 'push', 'squat'];
   return ['power', 'squat', 'hinge', 'push', 'pull', 'carry', 'rotation', 'conditioning'];
 }
 
-function wantedPatternForPhase(phase: ExercisePhase, patterns: MovementPattern[], index: number): MovementPattern[] {
-  if (phase === 'warmup') return ['core', 'squat', 'hinge', 'mobility'];
-  if (phase === 'main') return [patterns[index % Math.min(4, patterns.length)]];
-  if (phase === 'accessory') return [patterns[(index + 2) % patterns.length]];
+function wantedPatternForPhase(
+  phase: ExercisePhase,
+  patterns: MovementPattern[],
+  index: number,
+  workoutType: WorkoutSession['workoutType'],
+): MovementPattern[] {
+  const mainBySplit: Partial<Record<WorkoutSession['workoutType'], MovementPattern[]>> = {
+    push: ['push'],
+    pull: ['pull'],
+    legs: ['squat', 'hinge', 'lunge'],
+    upper: ['push', 'pull'],
+    lower: ['squat', 'hinge', 'lunge'],
+    full_body: ['squat', 'push', 'pull', 'hinge', 'lunge'],
+    mma_bjj: ['power', 'pull', 'hinge', 'rotation'],
+    mobility_only: ['core', 'mobility'],
+    recovery: ['core', 'mobility'],
+  };
+  const mainPatterns = mainBySplit[workoutType]
+    ?? patterns.filter((pattern) => !['conditioning', 'core', 'mobility'].includes(pattern));
+  const safeMainPatterns: MovementPattern[] = mainPatterns.length ? mainPatterns : ['core'];
+
+  if (phase === 'warmup') return Array.from(new Set<MovementPattern>([safeMainPatterns[index % safeMainPatterns.length], 'core', 'mobility']));
+  if (phase === 'main') return [safeMainPatterns[index % safeMainPatterns.length]];
+  if (phase === 'accessory') {
+    const accessoryPatterns = Array.from(new Set<MovementPattern>([
+      ...patterns.filter((pattern) => ['core', 'carry', 'rotation'].includes(pattern)),
+      ...safeMainPatterns,
+    ]));
+    return [accessoryPatterns[index % accessoryPatterns.length]];
+  }
   if (phase === 'conditioning') return ['conditioning', 'carry', 'rotation', 'power'];
   if (phase === 'cooldown' || phase === 'mobility') return ['core', 'mobility'];
   return [patterns[index % patterns.length]];
 }
 
 function phaseMatches(item: ExerciseLibraryItem, phase: ExercisePhase, wanted: MovementPattern[]) {
-  if (phase === 'warmup') return item.difficulty === 'beginner' && wanted.includes(item.movementPattern);
-  if (phase === 'conditioning') return ['conditioning', 'carry', 'power'].includes(item.movementPattern);
-  if (phase === 'cooldown' || phase === 'mobility') return item.movementPattern === 'core' || item.difficulty === 'beginner';
-  return wanted.includes(item.movementPattern);
+  if (phase === 'warmup') {
+    return item.intensity === 'easy'
+      && !item.isConditioning
+      && wanted.includes(item.movementPattern);
+  }
+  if (phase === 'main') {
+    return wanted.includes(item.movementPattern)
+      && (item.isMainLift || item.movementPattern === 'power');
+  }
+  if (phase === 'accessory') {
+    return wanted.includes(item.movementPattern)
+      && (item.isAccessory || ['core', 'carry', 'rotation'].includes(item.movementPattern));
+  }
+  if (phase === 'conditioning') return item.isConditioning || item.movementPattern === 'conditioning';
+  if (phase === 'cooldown' || phase === 'mobility') {
+    return item.intensity === 'easy' && ['core', 'mobility'].includes(item.movementPattern);
+  }
+  return false;
+}
+
+function fallbackPhaseMatches(item: ExerciseLibraryItem, phase: ExercisePhase, wanted: MovementPattern[]) {
+  if (phase === 'warmup') return item.intensity === 'easy' && !item.isConditioning;
+  if (phase === 'main') return item.isMainLift || (wanted.includes(item.movementPattern) && item.movementPattern === 'power');
+  if (phase === 'accessory') {
+    return item.isAccessory
+      || ['core', 'carry', 'rotation'].includes(item.movementPattern)
+      || (!item.isMainLift && !item.isConditioning);
+  }
+  if (phase === 'conditioning') return item.isConditioning || ['conditioning', 'carry', 'power'].includes(item.movementPattern);
+  if (phase === 'cooldown' || phase === 'mobility') {
+    return item.intensity === 'easy'
+      && !item.isConditioning
+      && (item.isAccessory || ['core', 'mobility'].includes(item.movementPattern));
+  }
+  return false;
 }
 
 function prescribeExercise(
@@ -471,32 +689,71 @@ function prescribeExercise(
   difficulty: 'beginner' | 'intermediate' | 'advanced',
   feedback: UserFeedback[],
   completedWorkoutCount: number,
+  recoveryDay: boolean,
 ): WorkoutExercise {
   // Successful completed sessions gradually add volume or reduce rest; pain and poor recovery immediately regress it.
   const latest = feedback.slice(0, 2);
   const lowered = difficulty === 'beginner' || profile.readinessLevel < 55 || profile.sorenessLevel >= 8 || latest.some((entry) => entry.pain);
   const progressed = completedWorkoutCount >= 3 && latest.length >= 2 && latest.every((entry) => entry.completed && !entry.pain && entry.rpe <= 7);
   const mainLift = phase === 'main';
-  const conditioning = phase === 'conditioning' || item.movementPattern === 'conditioning';
+  const conditioning = phase === 'conditioning' || item.isConditioning;
+  const warmupOrCooldown = ['warmup', 'cooldown', 'mobility'].includes(phase);
+  const hybridStrength = profile.trainingPlan === 'hybrid' && ['strength', 'muscle'].includes(profile.goal);
 
-  const sets = conditioning ? undefined : lowered ? 2 : progressed && mainLift ? 5 : mainLift ? 4 : completedWorkoutCount >= 8 ? 4 : 3;
-  const reps = conditioning
-    ? undefined
-    : item.movementPattern === 'power'
-      ? '3-5'
-      : profile.goal === 'strength' && mainLift
-        ? '4-6'
-        : profile.goal === 'muscle'
-          ? '8-12'
-          : '8-15';
+  let sets = lowered ? 2 : 3;
+  let reps: string | undefined = '8-12';
+  let timeSeconds: number | undefined;
+  let restSeconds = lowered ? 75 : 60;
+
+  if (recoveryDay || profile.goal === 'recovery' || profile.goal === 'mobility') {
+    sets = lowered ? 1 : 2;
+    reps = conditioning ? undefined : '6-10 controlled';
+    timeSeconds = conditioning ? (lowered ? 20 : 30) : undefined;
+    restSeconds = 45;
+  } else if (hybridStrength) {
+    sets = mainLift ? (progressed ? 5 : 4) : 3;
+    reps = conditioning ? undefined : mainLift ? '4-8' : '8-12';
+    timeSeconds = conditioning ? (lowered ? 25 : progressed ? 50 : 40) : undefined;
+    restSeconds = conditioning ? (progressed ? 35 : 45) : mainLift ? (progressed ? 105 : 120) : 60;
+  } else if (profile.goal === 'strength') {
+    sets = mainLift ? (lowered ? 3 : progressed ? 5 : 4) : 3;
+    reps = mainLift ? (item.movementPattern === 'power' ? '3-5' : '3-6') : '6-12';
+    restSeconds = mainLift ? (lowered ? 90 : progressed ? 150 : 120) : 75;
+  } else if (profile.goal === 'muscle') {
+    sets = lowered ? 3 : progressed ? 4 : 3;
+    reps = '8-15';
+    restSeconds = mainLift ? 90 : 60;
+  } else if (profile.goal === 'fat_loss') {
+    sets = lowered ? 2 : progressed ? 4 : 3;
+    reps = conditioning ? undefined : '12-20';
+    timeSeconds = conditioning ? (lowered ? 25 : progressed ? 50 : 40) : undefined;
+    restSeconds = conditioning ? (lowered ? 45 : progressed ? 20 : 30) : 40;
+  } else if (profile.goal === 'conditioning' || profile.goal === 'endurance') {
+    sets = lowered ? 2 : progressed ? 4 : 3;
+    reps = conditioning ? undefined : '10-15';
+    timeSeconds = conditioning ? (lowered ? 30 : progressed ? 60 : 45) : undefined;
+    restSeconds = conditioning ? (lowered ? 60 : progressed ? 25 : 40) : 45;
+  } else {
+    sets = lowered ? 2 : progressed && mainLift ? 4 : 3;
+    reps = conditioning ? undefined : item.movementPattern === 'power' ? '3-5' : mainLift ? '5-10' : '8-15';
+    timeSeconds = conditioning ? (lowered ? 25 : progressed ? 50 : 40) : undefined;
+    restSeconds = conditioning ? (lowered ? 75 : progressed ? 35 : 45) : mainLift ? (progressed ? 90 : 105) : 60;
+  }
+
+  if (warmupOrCooldown && !recoveryDay) {
+    sets = lowered ? 1 : 2;
+    reps = item.movementPattern === 'mobility' ? undefined : '6-10 controlled';
+    timeSeconds = item.movementPattern === 'mobility' ? (lowered ? 25 : 40) : undefined;
+    restSeconds = Math.min(restSeconds, 45);
+  }
 
   return {
     item,
     phase,
     sets,
     reps,
-    timeSeconds: conditioning ? (lowered ? 25 : progressed ? 50 : 40) : undefined,
-    restSeconds: conditioning ? (lowered ? 75 : progressed ? 35 : 45) : mainLift ? (progressed ? 105 : 120) : (progressed ? 45 : 60),
+    timeSeconds,
+    restSeconds,
     rpeTarget: lowered ? 'RPE 5-6' : progressed ? 'RPE 7-8' : 'RPE 6-7',
     reason: reasonForExercise(item, profile),
     progression: progressed
@@ -536,6 +793,14 @@ function mobilityPhasePlan(mode: MobilitySessionMode, count: number, equipment: 
   phases.push(mode === 'pre_workout' ? 'static' : 'static');
   phases.push('breathing');
   return phases.slice(0, count);
+}
+
+function mobilityPhaseMatches(item: StretchLibraryItem, phase: StretchLibraryItem['phase']) {
+  if (phase === 'breathing') return item.phase === 'breathing';
+  if (phase === 'foam_roll') return item.phase === 'foam_roll' || item.phase === 'main';
+  if (phase === 'dynamic') return item.phase === 'dynamic' || item.phase === 'main';
+  if (phase === 'main') return item.phase === 'main' || item.phase === 'dynamic' || item.phase === 'static';
+  return item.phase === 'static' || item.phase === 'main';
 }
 
 function reasonForExercise(item: ExerciseLibraryItem, profile: UserProfile) {
@@ -587,13 +852,23 @@ function mobilityStepCount(minutes: number) {
   return 15;
 }
 
-function workoutPhasePlan(count: number, recoveryDay: boolean): ExercisePhase[] {
+function workoutPhasePlan(count: number, recoveryDay: boolean, allowConditioning: boolean): ExercisePhase[] {
   if (recoveryDay) return (['warmup', 'mobility', 'mobility', 'cooldown', 'cooldown'] as ExercisePhase[]).slice(0, count);
-  if (count <= 4) return ['warmup', 'main', 'conditioning', 'cooldown'];
-  if (count <= 6) return ['warmup', 'main', 'main', 'accessory', 'conditioning', 'cooldown'];
-  if (count <= 8) return ['warmup', 'warmup', 'main', 'main', 'accessory', 'accessory', 'conditioning', 'cooldown'];
-  if (count <= 10) return ['warmup', 'warmup', 'main', 'main', 'main', 'accessory', 'accessory', 'conditioning', 'cooldown', 'mobility'];
-  return ['warmup', 'warmup', 'main', 'main', 'main', 'main', 'accessory', 'accessory', 'accessory', 'conditioning', 'cooldown', 'mobility'];
+  if (count <= 4) return allowConditioning
+    ? ['warmup', 'main', 'conditioning', 'cooldown']
+    : ['warmup', 'main', 'accessory', 'cooldown'];
+  if (count <= 6) return allowConditioning
+    ? ['warmup', 'main', 'main', 'accessory', 'conditioning', 'cooldown']
+    : ['warmup', 'main', 'main', 'accessory', 'accessory', 'cooldown'];
+  if (count <= 8) return allowConditioning
+    ? ['warmup', 'warmup', 'main', 'main', 'accessory', 'accessory', 'conditioning', 'cooldown']
+    : ['warmup', 'warmup', 'main', 'main', 'main', 'accessory', 'accessory', 'cooldown'];
+  if (count <= 10) return allowConditioning
+    ? ['warmup', 'warmup', 'main', 'main', 'main', 'accessory', 'accessory', 'conditioning', 'cooldown', 'mobility']
+    : ['warmup', 'warmup', 'main', 'main', 'main', 'main', 'accessory', 'accessory', 'cooldown', 'mobility'];
+  return allowConditioning
+    ? ['warmup', 'warmup', 'main', 'main', 'main', 'main', 'accessory', 'accessory', 'accessory', 'conditioning', 'cooldown', 'mobility']
+    : ['warmup', 'warmup', 'main', 'main', 'main', 'main', 'main', 'accessory', 'accessory', 'accessory', 'cooldown', 'mobility'];
 }
 
 function getWorkoutIntensity(profile: UserProfile, workoutType: WorkoutSession['workoutType'], feedback: UserFeedback[]) {

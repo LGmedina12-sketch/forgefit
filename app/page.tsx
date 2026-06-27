@@ -98,6 +98,7 @@ const goalOptions: { label: string; value: TrainingGoal }[] = [
   { label: 'MMA/BJJ support', value: 'mma_bjj' },
   { label: 'Mobility', value: 'mobility' },
   { label: 'Recovery', value: 'recovery' },
+  { label: 'Conditioning', value: 'conditioning' },
   { label: 'Endurance', value: 'endurance' },
 ];
 
@@ -1007,6 +1008,12 @@ function WorkoutTab({
           <div className="mb-4 rounded-xl border border-orange-300/20 bg-orange-300/10 p-3 text-sm leading-6 text-orange-100">
             <span className="font-black">{workoutTypeLabels[generatedWorkout.workoutType]}</span> - {generatedWorkout.recommendationReason}
           </div>
+          {generatedWorkout.limitedMatchMessage && (
+            <div className="mb-4 rounded-xl border border-amber-300/30 bg-amber-300/10 p-3 text-sm font-bold leading-6 text-amber-100">
+              <AlertTriangle className="mr-2 inline h-4 w-4" />
+              {generatedWorkout.limitedMatchMessage}
+            </div>
+          )}
           <div className="mb-4 flex flex-wrap gap-2"><Tag>{generatedWorkout.intensity} intensity</Tag><Tag>{generatedWorkout.durationMinutes} minutes</Tag><Tag>{generatedWorkout.exercises.length} exercises</Tag></div>
           <div className="rounded-xl border border-amber-300/20 bg-amber-300/10 p-3 text-sm text-amber-100">
             <AlertTriangle className="mr-2 inline h-4 w-4" />
@@ -1420,7 +1427,9 @@ function ExerciseCard({ exercise, onSwap }: { exercise: WorkoutExercise; onSwap:
           <p className="text-xs font-black uppercase tracking-[0.18em] text-orange-300">{exercise.phase} - {exercise.item.movementPattern}</p>
           <h3 className="mt-1 text-xl font-black">{exercise.item.name}</h3>
           <p className="mt-1 text-sm text-zinc-300">
-            {exercise.sets ? `${exercise.sets} sets - ${exercise.reps}` : `${exercise.timeSeconds}s`} - rest {exercise.restSeconds}s - {exercise.rpeTarget}
+            {exercise.timeSeconds
+              ? `${exercise.sets ?? 1} rounds - ${exercise.timeSeconds}s`
+              : `${exercise.sets ?? 1} sets - ${exercise.reps ?? 'controlled reps'}`} - rest {exercise.restSeconds}s - {exercise.rpeTarget}
           </p>
           <p className="mt-2 text-sm leading-6 text-zinc-400">{exercise.item.description}</p>
         </div>
@@ -1725,6 +1734,7 @@ function AuthScreen({
 function CompactWorkout({ workout }: { workout: WorkoutSession }) {
   return (
     <div className="flex flex-col gap-2">
+      {workout.limitedMatchMessage && <p className="rounded-xl border border-amber-300/20 bg-amber-300/10 p-3 text-sm text-amber-100">{workout.limitedMatchMessage}</p>}
       {workout.exercises.slice(0, 4).map((exercise) => (
         <div key={exercise.item.id} className="flex items-center justify-between gap-3 rounded-xl bg-black/25 px-4 py-3">
           <span className="font-bold">{exercise.item.name}</span>
@@ -1865,7 +1875,7 @@ function InstructionList({ items }: { items: string[] }) {
     <div className="mt-3 rounded-xl bg-white/5 p-3">
       <p className="text-xs font-black uppercase tracking-[0.16em] text-zinc-400">Step-by-step instructions</p>
       <ol className="mt-2 list-decimal space-y-1 pl-5 text-sm leading-6 text-zinc-300">
-        {items.map((item) => <li key={item}>{item}</li>)}
+        {items.map((item, index) => <li key={`${index}-${item}`}>{item}</li>)}
       </ol>
     </div>
   );
@@ -2016,7 +2026,7 @@ function mapProfileRow(row: Record<string, unknown>, fallback: UserProfile): Use
   const planText = String(row.training_plan ?? row.split_plan ?? fallback.trainingPlan).toLowerCase();
   return {
     ...fallback,
-    goal: goalText.includes('strength') ? 'strength' : goalText.includes('muscle') ? 'muscle' : goalText.includes('fat') ? 'fat_loss' : goalText.includes('endurance') ? 'endurance' : goalText.includes('recovery') ? 'recovery' : goalText.includes('mobility') ? 'mobility' : goalText.includes('mma') || goalText.includes('bjj') ? 'mma_bjj' : fallback.goal,
+    goal: goalText.includes('strength') ? 'strength' : goalText.includes('muscle') ? 'muscle' : goalText.includes('fat') ? 'fat_loss' : goalText.includes('conditioning') ? 'conditioning' : goalText.includes('endurance') ? 'endurance' : goalText.includes('recovery') ? 'recovery' : goalText.includes('mobility') ? 'mobility' : goalText.includes('mma') || goalText.includes('bjj') ? 'mma_bjj' : fallback.goal,
     trainingPlan: planText.includes('hybrid') ? 'hybrid' : planText.includes('upper') ? 'upper_lower' : planText.includes('full') ? 'full_body' : planText.includes('mobility') ? 'mobility_only' : planText.includes('mma') || planText.includes('bjj') ? 'mma_bjj_athletic' : 'push_pull_legs',
     experienceLevel: experienceText.includes('beginner') ? 'beginner' : experienceText.includes('advanced') ? 'advanced' : experienceText.includes('competitive') ? 'competitive' : 'intermediate',
     equipment: Array.isArray(row.equipment_profile) ? row.equipment_profile as string[] : fallback.equipment,
